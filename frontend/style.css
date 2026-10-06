@@ -335,11 +335,10 @@ select:focus, input:focus {
 
 .canvas-wrapper {
     flex: 2;
+    min-height: 360px;
     position: relative;
     border-bottom: 1px solid var(--border-color);
     background-color: var(--bg-color);
-    display: flex;
-    flex-direction: column;
 }
 
 .canvas-legend {
@@ -386,7 +385,11 @@ select:focus, input:focus {
 }
 
 #network-canvas {
-    flex: 1;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
     width: 100%;
     height: 100%;
     outline: none;
