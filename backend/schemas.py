@@ -1,3 +1,4 @@
+from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -9,13 +10,13 @@ class SimulationRequest(BaseModel):
     disaster_type: str = Field(
         ...,
         min_length=1,
-        examples=["Category 4 Hurricane", "Flash Flood"],
+        examples=["Category 5 Hurricane", "Flash Flood"],
         description="The type of climate disaster impacting the infrastructure grid.",
     )
     epicenter_node: str = Field(
         ...,
         min_length=1,
-        examples=["Main Power Plant"],
+        examples=["Power Grid"],
         description="The starting infrastructure node at the epicenter of the disaster.",
     )
 
@@ -25,7 +26,13 @@ class NodeState(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    parent_node: Optional[str] = Field(
+        default=None,
+        description="The failed upstream parent node that triggered this evaluation (None for epicenter).",
+    )
+    child_node: str = Field(..., description="Identifier/name of the evaluated child node.")
     node_name: str = Field(..., description="Identifier/name of the infrastructure node.")
+    node_type: str = Field(default="unknown", description="Infrastructure category/type of the node.")
     status: bool = Field(
         ...,
         description="Operational status of the node: False means failed, True means survived.",
