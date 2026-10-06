@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: weatherfall_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-weatherfall}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-weatherfall_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-weatherfall_db}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-weatherfall} -d $${POSTGRES_DB:-weatherfall_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: weatherfall_api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-weatherfall}:${POSTGRES_PASSWORD:-weatherfall_pass}@db:5432/${POSTGRES_DB:-weatherfall_db}
+    volumes:
+      - ./backend:/app/backend
+      - ./data:/app/data
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
