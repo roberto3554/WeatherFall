@@ -403,6 +403,8 @@ select:focus, input:focus {
     display: inline-block;
 }
 .dot-energy { background-color: #1f1608; border: 2px solid #f0883e; }
+.dot-water { background-color: #04242b; border: 2px solid #00FFFF; }
+.dot-transport { background-color: #291a04; border: 2px solid #FFA500; }
 .dot-health { background-color: #0d261a; border: 2px solid #3fb950; }
 .dot-comms { background-color: #1e1433; border: 2px solid #bc8cff; }
 .dot-fail { background-color: #f85149; border: 2px solid #ff7b72; }

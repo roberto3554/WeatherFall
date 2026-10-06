@@ -3,11 +3,11 @@
 let network = null;
 let nodesDataSet = null;
 let edgesDataSet = null;
-let topologyNodes = []; // Stores [{ id, name, type, x, y }]
+let topologyNodes = []; // Stores [{ id, name, type, rawX, rawY, x, y }]
 let isSimulating = false;
 let activeDropdownIndex = -1;
 
-// Task 1: Preload the dark-mode Miami map image
+// Preload the dark-mode Miami map image
 const mapImage = new Image();
 mapImage.src = '/static/miami-dark-map.png';
 
@@ -23,8 +23,8 @@ const MIAMI_GEO_BOUNDS = {
 let mapBounds = {
     centerX: 0,
     centerY: 0,
-    width: 1200,
-    height: 950
+    width: 1800,
+    height: 1425
 };
 
 mapImage.onload = function () {
@@ -34,6 +34,96 @@ mapImage.onload = function () {
 };
 
 /**
+ * Helper to encode raw SVG markup into a valid data URI.
+ */
+function toSvgDataUri(svgString) {
+    return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgString.trim());
+}
+
+/**
+ * Generates minimalist, terminal-style inline SVG string for each infrastructure type.
+ * Supports an optional strokeOverride for simulation states (evaluating, failed, survived).
+ */
+function createTerminalSvg(nodeType = 'energy', strokeOverride = null) {
+    const type = String(nodeType).toLowerCase();
+
+    if (type.includes('water') || type.includes('sanitation')) {
+        const stroke = strokeOverride || '#00FFFF';
+        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="36" height="36">
+            <circle cx="18" cy="18" r="16" fill="#060c14" fill-opacity="0.78" stroke="${stroke}" stroke-width="1.8"/>
+            <path d="M18 7 C18 7 10 17 10 22 A8 8 0 0 0 26 22 C26 17 18 7 18 7 Z" fill="none" stroke="${stroke}" stroke-width="2.2" stroke-linejoin="round"/>
+            <path d="M14 23 A4 4 0 0 0 18 26" fill="none" stroke="${stroke}" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>`;
+    }
+
+    if (type.includes('transport')) {
+        const stroke = strokeOverride || '#FFA500';
+        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="36" height="36">
+            <circle cx="18" cy="18" r="16" fill="#060c14" fill-opacity="0.78" stroke="${stroke}" stroke-width="1.8"/>
+            <path d="M7 24 L29 24 M11 24 L11 14 M25 24 L25 14 M7 19 Q18 10 29 19" fill="none" stroke="${stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <line x1="18" y1="14" x2="18" y2="24" stroke="${stroke}" stroke-width="1.6" stroke-dasharray="2,2"/>
+        </svg>`;
+    }
+
+    if (type.includes('health')) {
+        const stroke = strokeOverride || '#00FF00';
+        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="36" height="36">
+            <circle cx="18" cy="18" r="16" fill="#060c14" fill-opacity="0.78" stroke="${stroke}" stroke-width="1.8"/>
+            <path d="M15 9 H21 V15 H27 V21 H21 V27 H15 V21 H9 V15 H15 Z" fill="none" stroke="${stroke}" stroke-width="2.2" stroke-linejoin="round"/>
+        </svg>`;
+    }
+
+    if (type.includes('comms') || type.includes('telecom')) {
+        const stroke = strokeOverride || '#00FF00';
+        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="36" height="36">
+            <circle cx="18" cy="18" r="16" fill="#060c14" fill-opacity="0.78" stroke="${stroke}" stroke-width="1.8"/>
+            <path d="M18 14 L12 28 M18 14 L24 28 M14 23 H22" fill="none" stroke="${stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="18" cy="12" r="2" fill="${stroke}"/>
+            <path d="M12 9 A8 8 0 0 1 24 9 M9 6.5 A12 12 0 0 1 27 6.5" fill="none" stroke="${stroke}" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>`;
+    }
+
+    // Default: 'energy' / power lightning bolt (#00FF00)
+    const stroke = strokeOverride || '#00FF00';
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="36" height="36">
+        <circle cx="18" cy="18" r="16" fill="#060c14" fill-opacity="0.78" stroke="${stroke}" stroke-width="1.8"/>
+        <polygon points="20,7 10,20 17,20 15,29 26,16 19,16" fill="none" stroke="${stroke}" stroke-width="2.2" stroke-linejoin="round"/>
+    </svg>`;
+}
+
+// Task 1: Dictionary of inline SVG data URIs for each node type
+const SVG_ICONS = {
+    energy: toSvgDataUri(createTerminalSvg('energy')),
+    health: toSvgDataUri(createTerminalSvg('health')),
+    comms: toSvgDataUri(createTerminalSvg('comms')),
+    water: toSvgDataUri(createTerminalSvg('water')),
+    transport: toSvgDataUri(createTerminalSvg('transport'))
+};
+
+/**
+ * Returns the appropriate inline SVG data URI for a given node type and optional status stroke color.
+ */
+function getNodeSvgIcon(nodeType = 'energy', strokeOverride = null) {
+    if (strokeOverride) {
+        return toSvgDataUri(createTerminalSvg(nodeType, strokeOverride));
+    }
+    const type = String(nodeType).toLowerCase();
+    if (type.includes('water')) return SVG_ICONS.water;
+    if (type.includes('transport')) return SVG_ICONS.transport;
+    if (type.includes('health')) return SVG_ICONS.health;
+    if (type.includes('comms') || type.includes('telecom')) return SVG_ICONS.comms;
+    return SVG_ICONS.energy;
+}
+
+/**
+ * Task 2: Truncates a node label to max 15 characters with ellipsis (...)
+ */
+function truncateLabel(name = '', maxLen = 15) {
+    const str = String(name).trim();
+    return str.length > maxLen ? str.slice(0, maxLen) + '...' : str;
+}
+
+/**
  * Projects geographic (lon, lat) or raw (x, y) coordinates onto locked canvas coordinates
  * aligned with the Miami background map bounding box.
  */
@@ -41,7 +131,6 @@ function projectNodeCoordinates(rawX, rawY) {
     const x = Number(rawX) || 0;
     const y = Number(rawY) || 0;
 
-    // Detect WGS84 Miami geographic coordinates (lon ~ -80.x, lat ~ 25.x)
     if (x <= -79.0 && x >= -82.0 && y >= 24.5 && y <= 27.0) {
         const normX = (x - MIAMI_GEO_BOUNDS.minLon) / (MIAMI_GEO_BOUNDS.maxLon - MIAMI_GEO_BOUNDS.minLon);
         const normY = (MIAMI_GEO_BOUNDS.maxLat - y) / (MIAMI_GEO_BOUNDS.maxLat - MIAMI_GEO_BOUNDS.minLat);
@@ -55,19 +144,51 @@ function projectNodeCoordinates(rawX, rawY) {
 }
 
 /**
+ * Gently pushes apart nearby nodes whose labels would overlap on screen
+ * while preserving their relative geographic layout.
+ */
+function declusterNodePositions(nodes, minDx = 135, minDy = 64, iterations = 35) {
+    for (let iter = 0; iter < iterations; iter++) {
+        let moved = false;
+        for (let i = 0; i < nodes.length; i++) {
+            for (let j = i + 1; j < nodes.length; j++) {
+                const a = nodes[i];
+                const b = nodes[j];
+                let dx = b.x - a.x;
+                let dy = b.y - a.y;
+
+                if (Math.abs(dx) < minDx && Math.abs(dy) < minDy) {
+                    moved = true;
+                    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) {
+                        dx = (i % 2 === 0 ? 1 : -1) * 10;
+                        dy = (j % 2 === 0 ? 1 : -1) * 10;
+                    }
+                    const overlapX = (minDx - Math.abs(dx)) * 0.25 * (dx >= 0 ? 1 : -1);
+                    const overlapY = (minDy - Math.abs(dy)) * 0.35 * (dy >= 0 ? 1 : -1);
+                    a.x -= overlapX;
+                    b.x += overlapX;
+                    a.y -= overlapY;
+                    b.y += overlapY;
+                }
+            }
+        }
+        if (!moved) break;
+    }
+}
+
+/**
  * Calculates the bounding box dimensions across all projected nodes to center the map.
  */
 function calculateMapBounds(nodes) {
     if (!nodes || nodes.length === 0) {
-        return { centerX: 0, centerY: 0, width: 1200, height: 950 };
+        return { centerX: 0, centerY: 0, width: 1800, height: 1425 };
     }
 
-    // If nodes are projected from Miami WGS84 bounds, keep 1:1 alignment with miami-dark-map.png
     const hasGeoNodes = nodes.some(
         n => n.rawX <= -79.0 && n.rawX >= -82.0 && n.rawY >= 24.5 && n.rawY <= 27.0
     );
     if (hasGeoNodes) {
-        return { centerX: 0, centerY: 0, width: 1200, height: 950 };
+        return { centerX: 0, centerY: 0, width: 1800, height: 1425 };
     }
 
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
@@ -86,77 +207,6 @@ function calculateMapBounds(nodes) {
         centerY: (minY + maxY) / 2,
         width,
         height
-    };
-}
-
-/**
- * Returns distinct dark-terminal colors based on the node's infrastructure type.
- */
-function getNodeColorByType(nodeType = '') {
-    const type = String(nodeType).toLowerCase();
-
-    if (type.includes('energy') || type.includes('power')) {
-        return {
-            background: '#1f1608',
-            border: '#f0883e',
-            highlight: { background: '#3b2609', border: '#ffa657' },
-            hover: { background: '#2d1e0b', border: '#ffa657' }
-        };
-    }
-    if (type.includes('water') || type.includes('sanitation')) {
-        return {
-            background: '#0c1d31',
-            border: '#58a6ff',
-            highlight: { background: '#132f4c', border: '#79c0ff' },
-            hover: { background: '#11263f', border: '#79c0ff' }
-        };
-    }
-    if (type.includes('comms') || type.includes('telecom')) {
-        return {
-            background: '#1e1433',
-            border: '#bc8cff',
-            highlight: { background: '#2e1f4d', border: '#d2a8ff' },
-            hover: { background: '#261940', border: '#d2a8ff' }
-        };
-    }
-    if (type.includes('health')) {
-        return {
-            background: '#0d261a',
-            border: '#3fb950',
-            highlight: { background: '#143a27', border: '#56d364' },
-            hover: { background: '#113021', border: '#56d364' }
-        };
-    }
-    if (type.includes('it') || type.includes('cloud') || type.includes('data')) {
-        return {
-            background: '#0a252c',
-            border: '#39c5cf',
-            highlight: { background: '#103842', border: '#56d4dd' },
-            hover: { background: '#0d2e36', border: '#56d4dd' }
-        };
-    }
-    if (type.includes('safety') || type.includes('emergency')) {
-        return {
-            background: '#2b1224',
-            border: '#f778ba',
-            highlight: { background: '#3d1933', border: '#ff9bce' },
-            hover: { background: '#34152b', border: '#ff9bce' }
-        };
-    }
-    if (type.includes('transport')) {
-        return {
-            background: '#261f0a',
-            border: '#d29922',
-            highlight: { background: '#382d0f', border: '#e3b341' },
-            hover: { background: '#2f260c', border: '#e3b341' }
-        };
-    }
-
-    return {
-        background: '#161b22',
-        border: '#58a6ff',
-        highlight: { background: '#1f2937', border: '#00ff00' },
-        hover: { background: '#1f2937', border: '#58a6ff' }
     };
 }
 
@@ -203,23 +253,25 @@ function updateTelemetry({ state, evaluated, total, failed, survived }) {
 }
 
 /**
- * Resets all nodes and edges to their initial sector-colored state.
+ * Resets all nodes and edges to their initial inline SVG icon state.
  */
 function resetGraphState() {
     if (!nodesDataSet || !edgesDataSet) return;
 
     const nodeUpdates = topologyNodes.map(node => ({
         id: node.id,
-        label: node.name,
-        size: 16,
-        color: getNodeColorByType(node.type)
+        label: truncateLabel(node.name, 15),
+        title: node.name,
+        size: 18,
+        shape: 'image',
+        image: getNodeSvgIcon(node.type)
     }));
     nodesDataSet.update(nodeUpdates);
 
     const edgeUpdates = edgesDataSet.get().map(edge => ({
         id: edge.id,
-        width: 1.5,
-        color: { color: 'rgba(88, 166, 255, 0.28)', highlight: '#00ff00', hover: '#58a6ff' }
+        width: 1.4,
+        color: { color: 'rgba(88, 166, 255, 0.25)', highlight: '#00ff00', hover: '#58a6ff' }
     }));
     edgesDataSet.update(edgeUpdates);
 
@@ -251,14 +303,11 @@ function setEpicenterInput(nodeIdentifier, focusCanvas = false) {
 
     if (!isSimulating && nodesDataSet && nodesDataSet.get(nodeIdentifier)) {
         resetGraphState();
+        const targetNode = topologyNodes.find(n => n.id === nodeIdentifier || n.name === nodeIdentifier);
         nodesDataSet.update({
             id: nodeIdentifier,
-            size: 22,
-            color: {
-                background: '#0d261a',
-                border: '#00ff00',
-                highlight: { background: '#0d261a', border: '#00ff00' }
-            }
+            size: 24,
+            image: getNodeSvgIcon(targetNode ? targetNode.type : 'energy', '#00FF00')
         });
         if (network) {
             network.selectNodes([nodeIdentifier]);
@@ -273,8 +322,8 @@ function setEpicenterInput(nodeIdentifier, focusCanvas = false) {
 }
 
 /**
- * Task 1 & Task 2: Fetch topology from GET /api/v1/topology, render synchronized
- * Miami map in network.on("beforeDrawing"), and lock node positions with pan/zoom enabled.
+ * Task 1 & Task 2: Fetch topology from GET /api/v1/topology, map each node to its
+ * inline SVG icon with truncated 15-char labels and full native hover tooltips.
  */
 async function fetchAndRenderTopology() {
     const container = document.getElementById('network-canvas');
@@ -292,11 +341,10 @@ async function fetchAndRenderTopology() {
         const rawNodes = Array.isArray(data.nodes) ? data.nodes : [];
         const rawEdges = Array.isArray(data.edges) ? data.edges : [];
 
-        // Normalize backend nodes and project spatial coordinates onto canvas
         topologyNodes = rawNodes.map(node => {
             const nodeName = node.name || node.label || String(node.id);
             const nodeId = String(node.id ?? nodeName);
-            const nodeType = node.type || node.group || 'infrastructure';
+            const nodeType = node.type || node.group || 'energy';
             const rawX = Number(node.x ?? 0);
             const rawY = Number(node.y ?? 0);
             const projected = projectNodeCoordinates(rawX, rawY);
@@ -312,22 +360,24 @@ async function fetchAndRenderTopology() {
             };
         });
 
+        declusterNodePositions(topologyNodes);
         mapBounds = calculateMapBounds(topologyNodes);
 
         if (nodeCountBadge) {
             nodeCountBadge.textContent = `${topologyNodes.length} nodes`;
         }
 
-        // Map backend nodes into vis.DataSet with locked geographic coordinates
+        // Map backend nodes into vis.DataSet with shape: 'image', SVG data URIs, and 15-char truncated labels
         nodesDataSet = new vis.DataSet(
             topologyNodes.map(node => ({
                 id: node.id,
-                label: node.name,
-                title: `${node.name} [${node.type.toUpperCase()}] (${node.rawY.toFixed(4)}, ${node.rawX.toFixed(4)})`,
+                label: truncateLabel(node.name, 15),
+                title: node.name,
                 group: node.type,
+                shape: 'image',
+                image: getNodeSvgIcon(node.type),
                 x: node.x,
-                y: node.y,
-                color: getNodeColorByType(node.type)
+                y: node.y
             }))
         );
 
@@ -339,29 +389,23 @@ async function fetchAndRenderTopology() {
             }))
         );
 
-        // Task 2: Disable node dragging while enabling pan (dragView) and zoom (zoomView)
+        // Task 2: Global vis.Network options with dark-halo font stroke and native hover tooltips
         const options = {
             nodes: {
-                shape: 'dot',
-                size: 16,
+                shape: 'image',
+                size: 18,
                 font: {
-                    color: '#e6edf3',
+                    color: '#ffffff',
+                    strokeWidth: 4,
+                    strokeColor: '#0d1117',
                     size: 12,
-                    face: 'Courier New',
-                    strokeWidth: 3,
-                    strokeColor: '#060c14'
-                },
-                borderWidth: 2,
-                shadow: {
-                    enabled: true,
-                    color: 'rgba(0, 0, 0, 0.75)',
-                    size: 8
+                    face: 'Courier New'
                 }
             },
             edges: {
-                width: 1.5,
-                color: { color: 'rgba(88, 166, 255, 0.28)', highlight: '#00ff00', hover: '#58a6ff' },
-                arrows: { to: { enabled: true, scaleFactor: 0.6 } },
+                width: 1.4,
+                color: { color: 'rgba(88, 166, 255, 0.25)', highlight: '#00ff00', hover: '#58a6ff' },
+                arrows: { to: { enabled: true, scaleFactor: 0.55 } },
                 smooth: { type: 'continuous' }
             },
             physics: {
@@ -372,7 +416,7 @@ async function fetchAndRenderTopology() {
                 dragView: true,
                 zoomView: true,
                 hover: true,
-                tooltipDelay: 150
+                tooltipDelay: 200
             }
         };
 
@@ -382,7 +426,7 @@ async function fetchAndRenderTopology() {
             options
         );
 
-        // Task 1: Draw the preloaded Miami dark map centered on the bounding box before drawing nodes
+        // Synchronized Miami dark map rendering behind nodes
         network.on('beforeDrawing', function (ctx) {
             if (mapImage.complete && mapImage.naturalWidth > 0) {
                 const drawX = mapBounds.centerX - mapBounds.width / 2;
@@ -396,7 +440,7 @@ async function fetchAndRenderTopology() {
             }
         });
 
-        // Update 'Epicenter Node' when user taps/clicks a node on the canvas
+        // Update 'Epicenter Node' when user clicks a node on the canvas
         network.on('click', (params) => {
             if (params.nodes && params.nodes.length > 0 && !isSimulating) {
                 const clickedNodeId = params.nodes[0];
@@ -429,7 +473,7 @@ async function fetchAndRenderTopology() {
         }
 
         appendLog(
-            `Rendered Miami map topology: ${topologyNodes.length} nodes and ${rawEdges.length} directed edges.`,
+            `Rendered Miami map topology: ${topologyNodes.length} SVG nodes and ${rawEdges.length} directed edges.`,
             'system-msg'
         );
     } catch (error) {
@@ -478,7 +522,6 @@ async function runSimulation() {
         epicenterInput.value = epicenterNode;
     }
 
-    // On mobile viewports, auto-collapse the floating control card so the map is visible during playback
     if (window.innerWidth <= 768 && sidebar && !sidebar.classList.contains('collapsed')) {
         sidebar.classList.add('collapsed');
         if (sidebarToggleBtn) sidebarToggleBtn.textContent = '[ CONTROLS ▼ ]';
@@ -556,16 +599,15 @@ async function animateExecutionTrace(trace) {
         const nodeName = step.child_node || step.node_name;
         const matchingNode = topologyNodes.find(n => n.name === nodeName || n.id === nodeName);
         const nodeId = matchingNode ? matchingNode.id : nodeName;
+        const nodeType = matchingNode ? matchingNode.type : (step.node_type || 'energy');
+        const shortName = truncateLabel(nodeName, 15);
 
         if (nodesDataSet && nodesDataSet.get(nodeId)) {
             nodesDataSet.update({
                 id: nodeId,
-                label: `${nodeName}\n[EVALUATING...]`,
+                label: `${shortName}\n[EVAL...]`,
                 size: 23,
-                color: {
-                    background: '#d29922',
-                    border: '#f0e68c'
-                }
+                image: getNodeSvgIcon(nodeType, '#d29922')
             });
 
             network.focus(nodeId, {
@@ -584,18 +626,15 @@ async function animateExecutionTrace(trace) {
         }
         evaluatedSet.add(nodeId);
 
-        const statusColor = survived
-            ? { background: '#00ff00', border: '#7ee787', highlight: { background: '#00ff00', border: '#ffffff' } }
-            : { background: '#f85149', border: '#ff7b72', highlight: { background: '#f85149', border: '#ffffff' } };
-
-        const statusBadge = survived ? '[SURVIVED]' : '[FAILED]';
+        const statusBadge = survived ? '[OK]' : '[FAIL]';
+        const statusStroke = survived ? '#00FF00' : '#f85149';
 
         if (nodesDataSet && nodesDataSet.get(nodeId)) {
             nodesDataSet.update({
                 id: nodeId,
-                label: `${nodeName}\n${statusBadge}`,
+                label: `${shortName}\n${statusBadge}`,
                 size: survived ? 19 : 22,
-                color: statusColor
+                image: getNodeSvgIcon(nodeType, statusStroke)
             });
         }
 
@@ -724,14 +763,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const dropdown = document.getElementById('epicenter-dropdown');
     const quickChipsContainer = document.getElementById('quick-epicenters');
 
-    // Mobile control card & collapsible terminal elements
     const sidebar = document.getElementById('control-sidebar');
     const sidebarToggleBtn = document.getElementById('sidebar-toggle-btn');
     const consoleDrawer = document.getElementById('console-drawer');
     const consoleHeader = document.getElementById('console-header');
     const consoleToggleBtn = document.getElementById('console-toggle-btn');
 
-    // Default console to collapsed on mobile so it doesn't obscure the map
     if (window.innerWidth <= 768 && consoleDrawer && consoleToggleBtn) {
         consoleDrawer.classList.add('collapsed');
         consoleToggleBtn.textContent = '[ EXPAND ▲ ]';
