@@ -1,5 +1,6 @@
 import asyncio
-from sqlalchemy import delete
+from typing import Any
+from sqlalchemy import delete, text
 
 try:
     from .database import AsyncSessionLocal, engine, init_db
@@ -9,157 +10,162 @@ except ImportError:
     from models import Edge, Node, SimulationTrace
 
 
-# 16 interconnected urban infrastructure nodes across critical sectors
-INITIAL_NODES: list[tuple[str, str]] = [
-    ("Hydroelectric Dam", "Energy Generation"),
-    ("Natural Gas Power Plant", "Energy Generation"),
-    ("Main Power Grid", "Energy Transmission"),
-    ("North Substation", "Power Distribution"),
-    ("South Substation", "Power Distribution"),
-    ("Water Treatment Plant", "Water & Sanitation"),
-    ("Municipal Pumping Station", "Water & Sanitation"),
-    ("Wastewater Facility", "Water & Sanitation"),
-    ("5G Telecom Tower", "Telecommunications"),
-    ("Regional Data Center", "IT & Cloud Infrastructure"),
-    ("Emergency Dispatch Center", "Public Safety"),
-    ("City Hospital", "Healthcare"),
-    ("Community Clinic", "Healthcare"),
-    ("Metro Rail Control", "Transportation"),
-    ("Traffic Management Grid", "Transportation"),
-    ("Cold Storage Logistics Hub", "Supply Chain"),
-]
-
-# Directed dependency edges: (source_node_name, target_node_name)
-INITIAL_EDGES: list[tuple[str, str]] = [
-    # Generation -> Main Grid & Regional Distribution
-    ("Hydroelectric Dam", "Main Power Grid"),
-    ("Hydroelectric Dam", "Water Treatment Plant"),
-    ("Natural Gas Power Plant", "Main Power Grid"),
-    ("Natural Gas Power Plant", "South Substation"),
-    # Main Grid -> Substations & Core Utilities
-    ("Main Power Grid", "North Substation"),
-    ("Main Power Grid", "South Substation"),
-    ("Main Power Grid", "Water Treatment Plant"),
-    ("Main Power Grid", "5G Telecom Tower"),
-    # North Substation -> Downstream Dependents
-    ("North Substation", "Regional Data Center"),
-    ("North Substation", "Metro Rail Control"),
-    ("North Substation", "City Hospital"),
-    # South Substation -> Downstream Dependents
-    ("South Substation", "Municipal Pumping Station"),
-    ("South Substation", "Cold Storage Logistics Hub"),
-    ("South Substation", "Community Clinic"),
-    # Water & Sanitation Cascade
-    ("Water Treatment Plant", "Municipal Pumping Station"),
-    ("Water Treatment Plant", "City Hospital"),
-    ("Water Treatment Plant", "Cold Storage Logistics Hub"),
-    ("Municipal Pumping Station", "Wastewater Facility"),
-    ("Municipal Pumping Station", "Community Clinic"),
-    ("Wastewater Facility", "Water Treatment Plant"),
-    # Telecom & IT Cascade
-    ("5G Telecom Tower", "City Hospital"),
-    ("5G Telecom Tower", "Emergency Dispatch Center"),
-    ("5G Telecom Tower", "Traffic Management Grid"),
-    ("5G Telecom Tower", "Regional Data Center"),
-    ("Regional Data Center", "Emergency Dispatch Center"),
-    ("Regional Data Center", "Metro Rail Control"),
-    ("Regional Data Center", "Cold Storage Logistics Hub"),
-    # Public Safety, Healthcare & Transport Cascade
-    ("Emergency Dispatch Center", "City Hospital"),
-    ("Emergency Dispatch Center", "Community Clinic"),
-    ("Emergency Dispatch Center", "Traffic Management Grid"),
-    ("Traffic Management Grid", "Emergency Dispatch Center"),
-    ("Traffic Management Grid", "Cold Storage Logistics Hub"),
-    ("Metro Rail Control", "Traffic Management Grid"),
-    ("City Hospital", "Community Clinic"),
-]
-
-
-SAMPLE_TRACES: list[dict] = [
+# Real-world Miami, Florida critical infrastructure topology (12 nodes with x, y coordinates)
+MIAMI_NODES: list[dict[str, Any]] = [
     {
-        "disaster_type": "Category 5 Hurricane",
-        "epicenter_node": "Hydroelectric Dam",
-        "trace_data": [
-            {
-                "node_name": "Hydroelectric Dam",
-                "status": False,
-                "reasoning": "Direct Category 5 Hurricane impact overwhelmed Hydroelectric Dam primary structural and operational thresholds.",
-            },
-            {
-                "node_name": "Main Power Grid",
-                "status": False,
-                "reasoning": "Failure of Hydroelectric Dam during Category 5 Hurricane starved Main Power Grid (Energy Transmission) of critical supply.",
-            },
-            {
-                "node_name": "Water Treatment Plant",
-                "status": False,
-                "reasoning": "Failure of Hydroelectric Dam during Category 5 Hurricane starved Water Treatment Plant (Water & Sanitation) of critical supply.",
-            },
-            {
-                "node_name": "North Substation",
-                "status": False,
-                "reasoning": "Failure of Main Power Grid during Category 5 Hurricane starved North Substation (Power Distribution) of critical supply.",
-            },
-            {
-                "node_name": "South Substation",
-                "status": False,
-                "reasoning": "Failure of Main Power Grid during Category 5 Hurricane starved South Substation (Power Distribution) of critical supply.",
-            },
-            {
-                "node_name": "5G Telecom Tower",
-                "status": False,
-                "reasoning": "Failure of Main Power Grid during Category 5 Hurricane starved 5G Telecom Tower (Telecommunications) of critical supply.",
-            },
-            {
-                "node_name": "City Hospital",
-                "status": True,
-                "reasoning": "City Hospital survived loss of Water Treatment Plant by engaging isolated diesel generators and satellite link.",
-            },
-        ],
-    }
+        "name": "Turkey Point Nuclear Generating Station",
+        "type": "power",
+        "x": -200.0,
+        "y": 300.0,
+    },
+    {
+        "name": "FPL Dania Beach Clean Energy Center",
+        "type": "power",
+        "x": -80.0,
+        "y": -260.0,
+    },
+    {
+        "name": "Downtown Miami Substation",
+        "type": "power",
+        "x": 0.0,
+        "y": 0.0,
+    },
+    {
+        "name": "Brickell Underground Vault Substation",
+        "type": "power",
+        "x": 35.0,
+        "y": 95.0,
+    },
+    {
+        "name": "Alexander Orr Jr. Water Treatment Plant",
+        "type": "water",
+        "x": -180.0,
+        "y": 130.0,
+    },
+    {
+        "name": "Virginia Key Wastewater Treatment Plant",
+        "type": "water",
+        "x": 190.0,
+        "y": 120.0,
+    },
+    {
+        "name": "Miami Beach Stormwater Pump Station #1",
+        "type": "water",
+        "x": 220.0,
+        "y": -70.0,
+    },
+    {
+        "name": "NAP of the Americas (Equinix MI1)",
+        "type": "comms",
+        "x": 20.0,
+        "y": -55.0,
+    },
+    {
+        "name": "Miami-Dade 911 Emergency Operations Center",
+        "type": "safety",
+        "x": -210.0,
+        "y": -110.0,
+    },
+    {
+        "name": "Jackson Memorial Hospital",
+        "type": "health",
+        "x": -50.0,
+        "y": -20.0,
+    },
+    {
+        "name": "PortMiami Logistics Hub",
+        "type": "transport",
+        "x": 100.0,
+        "y": 50.0,
+    },
+    {
+        "name": "Miami International Airport (MIA) Fuel & Airfield Grid",
+        "type": "transport",
+        "x": -160.0,
+        "y": -40.0,
+    },
+]
+
+# Directed dependency edges between real-world Miami infrastructure facilities
+MIAMI_EDGES: list[tuple[str, str]] = [
+    # Baseload Generation -> Substations & Primary Utilities
+    ("Turkey Point Nuclear Generating Station", "Downtown Miami Substation"),
+    ("Turkey Point Nuclear Generating Station", "Brickell Underground Vault Substation"),
+    ("Turkey Point Nuclear Generating Station", "Alexander Orr Jr. Water Treatment Plant"),
+    ("FPL Dania Beach Clean Energy Center", "Downtown Miami Substation"),
+    ("FPL Dania Beach Clean Energy Center", "Miami International Airport (MIA) Fuel & Airfield Grid"),
+    ("FPL Dania Beach Clean Energy Center", "Miami Beach Stormwater Pump Station #1"),
+    # Downtown Miami Substation -> Core Metro Dependents
+    ("Downtown Miami Substation", "Jackson Memorial Hospital"),
+    ("Downtown Miami Substation", "PortMiami Logistics Hub"),
+    ("Downtown Miami Substation", "NAP of the Americas (Equinix MI1)"),
+    ("Downtown Miami Substation", "Virginia Key Wastewater Treatment Plant"),
+    # Brickell Vault Substation -> Coastal & Financial District Dependents
+    ("Brickell Underground Vault Substation", "NAP of the Americas (Equinix MI1)"),
+    ("Brickell Underground Vault Substation", "Virginia Key Wastewater Treatment Plant"),
+    ("Brickell Underground Vault Substation", "PortMiami Logistics Hub"),
+    # Water & Coastal Drainage Cascade
+    ("Alexander Orr Jr. Water Treatment Plant", "Jackson Memorial Hospital"),
+    ("Alexander Orr Jr. Water Treatment Plant", "Miami International Airport (MIA) Fuel & Airfield Grid"),
+    ("Alexander Orr Jr. Water Treatment Plant", "PortMiami Logistics Hub"),
+    ("Virginia Key Wastewater Treatment Plant", "Alexander Orr Jr. Water Treatment Plant"),
+    ("Miami Beach Stormwater Pump Station #1", "PortMiami Logistics Hub"),
+    # Telecommunications & Fiber Exchange Cascade
+    ("NAP of the Americas (Equinix MI1)", "Miami-Dade 911 Emergency Operations Center"),
+    ("NAP of the Americas (Equinix MI1)", "Jackson Memorial Hospital"),
+    ("NAP of the Americas (Equinix MI1)", "PortMiami Logistics Hub"),
+    ("NAP of the Americas (Equinix MI1)", "Miami International Airport (MIA) Fuel & Airfield Grid"),
+    # Emergency Dispatch & Transport Cascade
+    ("Miami-Dade 911 Emergency Operations Center", "Jackson Memorial Hospital"),
+    ("Miami-Dade 911 Emergency Operations Center", "Miami Beach Stormwater Pump Station #1"),
+    ("PortMiami Logistics Hub", "Jackson Memorial Hospital"),
+    ("Miami International Airport (MIA) Fuel & Airfield Grid", "Miami-Dade 911 Emergency Operations Center"),
 ]
 
 
 async def seed_database() -> None:
-    """Initializes schema and populates the database with the 16-node urban topology and sample traces."""
+    """Migrates schema columns if needed and seeds PostgreSQL with the Miami infrastructure graph."""
     await init_db()
+
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS x DOUBLE PRECISION DEFAULT 0.0;")
+        )
+        await conn.execute(
+            text("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS y DOUBLE PRECISION DEFAULT 0.0;")
+        )
+        await conn.execute(
+            text("ALTER TABLE simulation_traces ADD COLUMN IF NOT EXISTS magnitude VARCHAR(100);")
+        )
 
     async with AsyncSessionLocal() as session:
         async with session.begin():
-            # Clear existing topology for idempotent re-seeding
             await session.execute(delete(Edge))
             await session.execute(delete(Node))
-            await session.execute(delete(SimulationTrace))
 
             node_objs: dict[str, Node] = {}
-            for name, node_type in INITIAL_NODES:
-                node_obj = Node(name=name, type=node_type)
+            for item in MIAMI_NODES:
+                node_obj = Node(
+                    name=item["name"],
+                    type=item["type"],
+                    x=item["x"],
+                    y=item["y"],
+                )
                 session.add(node_obj)
-                node_objs[name] = node_obj
+                node_objs[item["name"]] = node_obj
 
-            # Flush to assign primary key IDs to all nodes
             await session.flush()
 
-            for source_name, target_name in INITIAL_EDGES:
+            for source_name, target_name in MIAMI_EDGES:
                 edge_obj = Edge(
                     source_node_id=node_objs[source_name].id,
                     target_node_id=node_objs[target_name].id,
                 )
                 session.add(edge_obj)
 
-            for sample in SAMPLE_TRACES:
-                session.add(
-                    SimulationTrace(
-                        disaster_type=sample["disaster_type"],
-                        epicenter_node=sample["epicenter_node"],
-                        trace_data=sample["trace_data"],
-                    )
-                )
-
         print(
-            f"Successfully seeded {len(INITIAL_NODES)} nodes, "
-            f"{len(INITIAL_EDGES)} directed edges, and "
-            f"{len(SAMPLE_TRACES)} sample simulation traces into PostgreSQL."
+            f"Successfully seeded {len(MIAMI_NODES)} real-world Miami nodes and "
+            f"{len(MIAMI_EDGES)} directed dependency edges into PostgreSQL."
         )
 
     await engine.dispose()

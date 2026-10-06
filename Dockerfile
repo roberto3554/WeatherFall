@@ -7,10 +7,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install system dependencies required for PostgreSQL driver and health checks
+# Install system dependencies required for PostgreSQL driver and spatial libraries (GEOS, PROJ, Rtree)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    g++ \
     libpq-dev \
+    libgeos-dev \
+    libproj-dev \
+    libspatialindex-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies first to leverage Docker layer caching

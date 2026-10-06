@@ -9,6 +9,8 @@ __pycache__/
 .env.*
 !.env.example
 
-# Generated Simulation Traces
+# Generated Simulation Traces & OSMnx Cache
 data/trace_*.json
 data/latest_trace.json
+cache/
+backend/cache/
