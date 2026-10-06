@@ -18,120 +18,140 @@ except ImportError:
 
 
 PLACE_QUERY = "Miami, Florida, USA"
+
 OSM_TAGS: dict[str, Any] = {
     "power": "substation",
-    "amenity": "hospital",
+    "amenity": ["hospital", "ferry_terminal"],
     "telecom": "exchange",
+    "man_made": ["water_works", "wastewater_plant", "pumping_station", "water_tower"],
+    "waterway": ["pump", "dam"],
+    "public_transport": "station",
+    "highway": "primary",
 }
 
-# Fallback real-world Miami telecom exchange hubs if OSM returns fewer than 2 'telecom=exchange' features
 FALLBACK_COMMS_NODES: list[dict[str, Any]] = [
-    {"name": "NAP of the Americas (Equinix MI1)", "type": "comms", "x": -80.1918, "y": 25.7825},
-    {"name": "AT&T Downtown Miami Central Office", "type": "comms", "x": -80.1936, "y": 25.7743},
-    {"name": "Verizon Brickell Fiber Exchange", "type": "comms", "x": -80.1909, "y": 25.7617},
+    {"name": "NAP of the Americas (Equinix)", "type": "comms", "x": -80.1918, "y": 25.7825},
+    {"name": "AT&T Downtown Miami Exchange", "type": "comms", "x": -80.1985, "y": 25.7743},
+    {"name": "Verizon Brickell Fiber Hub", "type": "comms", "x": -80.1930, "y": 25.7590},
+    {"name": "Little River Telecom Exchange", "type": "comms", "x": -80.1951, "y": 25.8527},
 ]
+
+FALLBACK_WATER_NODES: list[dict[str, Any]] = [
+    {"name": "Alexander Orr Water Plant", "type": "water", "x": -80.2890, "y": 25.7295},
+    {"name": "Virginia Key Wastewater Plant", "type": "water", "x": -80.1492, "y": 25.7440},
+    {"name": "Miami Beach Pump Station #1", "type": "water", "x": -80.1405, "y": 25.7890},
+    {"name": "Miami River Stormwater Pump", "type": "water", "x": -80.2140, "y": 25.7790},
+]
+
+# Per-sector caps and minimum spatial separation (in degrees, ~0.008 deg ≈ 900m)
+MAX_PER_TYPE: dict[str, int] = {
+    "energy": 12,
+    "health": 7,
+    "transport": 8,
+    "water": 5,
+    "comms": 4,
+}
+MIN_SEPARATION_DEG = 0.0085
 
 
 def classify_feature_type(row: pd.Series) -> str:
-    """Maps an OpenStreetMap feature row to 'energy', 'health', or 'comms'."""
-    if pd.notna(row.get("power")) and str(row.get("power")) == "substation":
+    """Maps an OpenStreetMap feature row to 'energy', 'health', 'comms', 'water', or 'transport'."""
+    power_val = str(row.get("power", "")) if pd.notna(row.get("power")) else ""
+    amenity_val = str(row.get("amenity", "")) if pd.notna(row.get("amenity")) else ""
+    man_made_val = str(row.get("man_made", "")) if pd.notna(row.get("man_made")) else ""
+    waterway_val = str(row.get("waterway", "")) if pd.notna(row.get("waterway")) else ""
+    pt_val = str(row.get("public_transport", "")) if pd.notna(row.get("public_transport")) else ""
+    highway_val = str(row.get("highway", "")) if pd.notna(row.get("highway")) else ""
+
+    if power_val == "substation":
         return "energy"
-    if pd.notna(row.get("amenity")) and str(row.get("amenity")) == "hospital":
+    if amenity_val == "hospital":
         return "health"
-    if pd.notna(row.get("telecom")) or pd.notna(row.get("man_made")):
+    if man_made_val in ("water_works", "wastewater_plant", "pumping_station", "water_tower") or waterway_val in ("pump", "dam"):
+        return "water"
+    if pt_val == "station" or amenity_val == "ferry_terminal" or highway_val == "primary":
+        return "transport"
+    if pd.notna(row.get("telecom")):
         return "comms"
     return "energy"
+
+
+def is_too_close(lon: float, lat: float, existing_nodes: list[dict[str, Any]], min_dist: float = MIN_SEPARATION_DEG) -> bool:
+    """Returns True if (lon, lat) is within min_dist degrees of any already-accepted node."""
+    for node in existing_nodes:
+        dist = float(np.hypot(lon - node["x"], lat - node["y"]))
+        if dist < min_dist:
+            return True
+    return False
 
 
 def extract_osm_miami_nodes() -> list[dict[str, Any]]:
     """
     Downloads critical infrastructure geometries for Miami, Florida from OpenStreetMap,
-    extracts centroid (lon -> x, lat -> y), and normalizes node names and types.
+    keeps named facilities with spatial separation so labels never stack on top of each other.
     """
     print(f"Downloading OpenStreetMap features for '{PLACE_QUERY}' with tags={OSM_TAGS}...")
     gdf: gpd.GeoDataFrame = ox.features_from_place(PLACE_QUERY, tags=OSM_TAGS)
 
-    # Ensure WGS84 (EPSG:4326) for lon/lat extraction
     if gdf.crs is not None and gdf.crs.to_epsg() != 4326:
         gdf = gdf.to_crs(epsg=4326)
 
     nodes: list[dict[str, Any]] = []
-    seen_names: dict[str, int] = {}
+    seen_names: set[str] = set()
+    type_counts: dict[str, int] = {"energy": 0, "health": 0, "comms": 0, "water": 0, "transport": 0}
 
     for _, row in gdf.iterrows():
         geom = row.geometry
         if geom is None or geom.is_empty:
             continue
 
+        raw_name = row.get("name")
+        if pd.isna(raw_name) or not str(raw_name).strip():
+            # Skip unnamed OSM polygons/segments so the map only displays real named facilities
+            continue
+
+        clean_name = str(raw_name).strip()
+        if clean_name in seen_names:
+            continue
+
+        node_type = classify_feature_type(row)
+        if type_counts.get(node_type, 0) >= MAX_PER_TYPE.get(node_type, 8):
+            continue
+
         centroid = geom.centroid
         lon = float(centroid.x)
         lat = float(centroid.y)
 
-        raw_name = row.get("name")
-        if pd.isna(raw_name) or not str(raw_name).strip():
-            base_name = "Unknown Node"
-        else:
-            base_name = str(raw_name).strip()
+        # Enforce minimum spatial separation so two nodes do not overlap on the canvas
+        min_sep = 0.003 if node_type == "health" else MIN_SEPARATION_DEG
+        if is_too_close(lon, lat, nodes, min_dist=min_sep):
+            continue
 
-        # Disambiguate duplicate names (e.g. multiple 'Unknown Node' entries) to satisfy UNIQUE constraint
-        count = seen_names.get(base_name, 0) + 1
-        seen_names[base_name] = count
-        unique_name = base_name if count == 1 else f"{base_name} #{count}"
+        seen_names.add(clean_name)
+        type_counts[node_type] = type_counts.get(node_type, 0) + 1
 
-        node_type = classify_feature_type(row)
         nodes.append(
             {
-                "name": unique_name,
+                "name": clean_name,
                 "type": node_type,
                 "x": lon,
                 "y": lat,
             }
         )
 
-    # If OSM has fewer than 2 'telecom=exchange' features in Miami city limits, query additional telecom towers/exchanges
-    comms_count = sum(1 for n in nodes if n["type"] == "comms")
-    if comms_count < 2:
-        try:
-            extra_comms_gdf = ox.features_from_place(
-                PLACE_QUERY,
-                tags={"telecom": True, "man_made": "communications_tower"},
-            )
-            if extra_comms_gdf.crs is not None and extra_comms_gdf.crs.to_epsg() != 4326:
-                extra_comms_gdf = extra_comms_gdf.to_crs(epsg=4326)
+    # Supplement comms exchange hubs
+    for item in FALLBACK_COMMS_NODES:
+        if item["name"] not in seen_names and type_counts["comms"] < MAX_PER_TYPE["comms"]:
+            nodes.append(item)
+            seen_names.add(item["name"])
+            type_counts["comms"] += 1
 
-            for _, row in extra_comms_gdf.iterrows():
-                geom = row.geometry
-                if geom is None or geom.is_empty:
-                    continue
-                centroid = geom.centroid
-                raw_name = row.get("name")
-                base_name = (
-                    str(raw_name).strip()
-                    if pd.notna(raw_name) and str(raw_name).strip()
-                    else "Unknown Comms Node"
-                )
-                count = seen_names.get(base_name, 0) + 1
-                seen_names[base_name] = count
-                unique_name = base_name if count == 1 else f"{base_name} #{count}"
-
-                nodes.append(
-                    {
-                        "name": unique_name,
-                        "type": "comms",
-                        "x": float(centroid.x),
-                        "y": float(centroid.y),
-                    }
-                )
-                comms_count += 1
-        except Exception:
-            pass
-
-    # Guarantee at least 3 comms nodes for KDTree secondary communication network
-    if comms_count < 2:
-        for item in FALLBACK_COMMS_NODES:
-            if item["name"] not in seen_names:
-                nodes.append(item)
-                seen_names[item["name"]] = 1
+    # Supplement water treatment/pumping stations
+    for item in FALLBACK_WATER_NODES:
+        if item["name"] not in seen_names and type_counts["water"] < MAX_PER_TYPE["water"]:
+            nodes.append(item)
+            seen_names.add(item["name"])
+            type_counts["water"] += 1
 
     return nodes
 
@@ -139,8 +159,10 @@ def extract_osm_miami_nodes() -> list[dict[str, Any]]:
 def build_spatial_dependency_graph(nodes: list[dict[str, Any]]) -> nx.DiGraph:
     """
     Builds a directed NetworkX graph connecting spatial nodes using scipy.spatial.KDTree:
-      1. Every 'health' and 'comms' node connects as a child/target to its nearest 'energy' node (source).
-      2. Secondary edges connect nearest 'comms' nodes to form a communication network.
+      1. Every 'health', 'comms', and 'water' node connects as a target to its nearest 'energy' node (source).
+      2. Every 'health' node connects as a target to its nearest 'transport' node (source).
+      3. Every 'transport' node connects as a target to its nearest 'energy' node (source).
+      4. Secondary edges connect nearest 'comms' nodes and nearest 'energy' substations.
     """
     graph = nx.DiGraph()
 
@@ -153,20 +175,33 @@ def build_spatial_dependency_graph(nodes: list[dict[str, Any]]) -> nx.DiGraph:
         )
 
     energy_nodes = [n for n in nodes if n["type"] == "energy"]
-    dependent_nodes = [n for n in nodes if n["type"] in ("health", "comms")]
+    health_nodes = [n for n in nodes if n["type"] == "health"]
     comms_nodes = [n for n in nodes if n["type"] == "comms"]
+    water_nodes = [n for n in nodes if n["type"] == "water"]
+    transport_nodes = [n for n in nodes if n["type"] == "transport"]
 
-    # Rule 1: Connect every 'health' and 'comms' node (target) to nearest 'energy' node (source)
-    if energy_nodes and dependent_nodes:
+    # Rule 1: Connect every 'health', 'comms', 'water', and 'transport' node (target) to nearest 'energy' node (source)
+    power_dependent_nodes = health_nodes + comms_nodes + water_nodes + transport_nodes
+    if energy_nodes and power_dependent_nodes:
         energy_coords = np.array([[n["x"], n["y"]] for n in energy_nodes], dtype=float)
         energy_tree = KDTree(energy_coords)
 
-        for dep_node in dependent_nodes:
+        for dep_node in power_dependent_nodes:
             _, nearest_idx = energy_tree.query([dep_node["x"], dep_node["y"]], k=1)
             nearest_energy_node = energy_nodes[int(nearest_idx)]
             graph.add_edge(nearest_energy_node["name"], dep_node["name"])
 
-    # Rule 2: Create secondary edges between nearest 'comms' nodes
+    # Rule 2: Connect every 'health' node (target) to the nearest 'transport' node (source)
+    if transport_nodes and health_nodes:
+        transport_coords = np.array([[n["x"], n["y"]] for n in transport_nodes], dtype=float)
+        transport_tree = KDTree(transport_coords)
+
+        for health_node in health_nodes:
+            _, nearest_idx = transport_tree.query([health_node["x"], health_node["y"]], k=1)
+            nearest_transport_node = transport_nodes[int(nearest_idx)]
+            graph.add_edge(nearest_transport_node["name"], health_node["name"])
+
+    # Rule 3: Create secondary edges between nearest 'comms' nodes
     if len(comms_nodes) >= 2:
         comms_coords = np.array([[n["x"], n["y"]] for n in comms_nodes], dtype=float)
         comms_tree = KDTree(comms_coords)
@@ -187,11 +222,11 @@ def build_spatial_dependency_graph(nodes: list[dict[str, Any]]) -> nx.DiGraph:
                     target_comms = comms_nodes[neighbor_idx]
                     graph.add_edge(comms_node["name"], target_comms["name"])
 
-    # Grid Interconnection: Connect each 'energy' substation to its 3 nearest neighboring 'energy' substations
+    # Rule 4: Connect each 'energy' substation to its nearest neighboring 'energy' substations
     if len(energy_nodes) >= 2:
         energy_coords = np.array([[n["x"], n["y"]] for n in energy_nodes], dtype=float)
         energy_tree = KDTree(energy_coords)
-        k_grid = min(4, len(energy_nodes))
+        k_grid = min(3, len(energy_nodes))
 
         for idx, energy_node in enumerate(energy_nodes):
             _, neighbor_indices = energy_tree.query(
@@ -213,7 +248,7 @@ def build_spatial_dependency_graph(nodes: list[dict[str, Any]]) -> nx.DiGraph:
 
 async def seed_miami_database() -> None:
     """
-    Task 4: Clears existing Node and Edge tables and persists all OSM-extracted
+    Clears existing Node and Edge tables and persists all OSM-extracted
     Miami nodes and KDTree dependency edges into PostgreSQL.
     """
     await init_db()
@@ -257,13 +292,13 @@ async def seed_miami_database() -> None:
                 )
                 session.add(edge_obj)
 
-        energy_cnt = sum(1 for _, d in graph.nodes(data=True) if d.get("type") == "energy")
-        health_cnt = sum(1 for _, d in graph.nodes(data=True) if d.get("type") == "health")
-        comms_cnt = sum(1 for _, d in graph.nodes(data=True) if d.get("type") == "comms")
+        counts: dict[str, int] = {}
+        for _, d in graph.nodes(data=True):
+            t = str(d.get("type", "unknown"))
+            counts[t] = counts.get(t, 0) + 1
 
         print(
-            f"Successfully seeded {graph.number_of_nodes()} OSM Miami nodes "
-            f"(energy={energy_cnt}, health={health_cnt}, comms={comms_cnt}) and "
+            f"Successfully seeded {graph.number_of_nodes()} OSM Miami nodes {counts} and "
             f"{graph.number_of_edges()} spatial KDTree edges into PostgreSQL."
         )
 
