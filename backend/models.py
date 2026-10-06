@@ -1,6 +1,6 @@
 from datetime import datetime
-from typing import Any
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, UniqueConstraint, func
+from typing import Any, Optional
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, JSON, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -11,13 +11,15 @@ except ImportError:
 
 
 class Node(Base):
-    """Represents a critical urban infrastructure node in the city topology."""
+    """Represents a real-world critical urban infrastructure node with spatial coordinates."""
 
     __tablename__ = "nodes"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False, index=True)
     type: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+    x: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0.0)
+    y: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0.0)
 
     outgoing_edges: Mapped[list["Edge"]] = relationship(
         "Edge",
@@ -74,8 +76,9 @@ class SimulationTrace(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     disaster_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    magnitude: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     epicenter_node: Mapped[str] = mapped_column(String(120), nullable=False)
-    trace_data: Mapped[list[dict[str, Any]]] = mapped_column(
+    trace_data: Mapped[Any] = mapped_column(
         JSONB().with_variant(JSON(), "sqlite"),
         nullable=False,
     )
