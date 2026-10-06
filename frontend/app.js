@@ -3,9 +3,91 @@
 let network = null;
 let nodesDataSet = null;
 let edgesDataSet = null;
-let topologyNodes = []; // Stores [{ id, name, type }]
+let topologyNodes = []; // Stores [{ id, name, type, x, y }]
 let isSimulating = false;
 let activeDropdownIndex = -1;
+
+// Task 1: Preload the dark-mode Miami map image
+const mapImage = new Image();
+mapImage.src = '/static/miami-dark-map.png';
+
+// Geographic bounds matching the rendered miami-dark-map.png
+const MIAMI_GEO_BOUNDS = {
+    minLon: -80.32,
+    maxLon: -80.12,
+    minLat: 25.71,
+    maxLat: 25.86
+};
+
+// Canvas bounding box dimensions used by beforeDrawing ctx.drawImage()
+let mapBounds = {
+    centerX: 0,
+    centerY: 0,
+    width: 1200,
+    height: 950
+};
+
+mapImage.onload = function () {
+    if (network) {
+        network.redraw();
+    }
+};
+
+/**
+ * Projects geographic (lon, lat) or raw (x, y) coordinates onto locked canvas coordinates
+ * aligned with the Miami background map bounding box.
+ */
+function projectNodeCoordinates(rawX, rawY) {
+    const x = Number(rawX) || 0;
+    const y = Number(rawY) || 0;
+
+    // Detect WGS84 Miami geographic coordinates (lon ~ -80.x, lat ~ 25.x)
+    if (x <= -79.0 && x >= -82.0 && y >= 24.5 && y <= 27.0) {
+        const normX = (x - MIAMI_GEO_BOUNDS.minLon) / (MIAMI_GEO_BOUNDS.maxLon - MIAMI_GEO_BOUNDS.minLon);
+        const normY = (MIAMI_GEO_BOUNDS.maxLat - y) / (MIAMI_GEO_BOUNDS.maxLat - MIAMI_GEO_BOUNDS.minLat);
+
+        const canvasX = (normX - 0.5) * mapBounds.width;
+        const canvasY = (normY - 0.5) * mapBounds.height;
+        return { x: canvasX, y: canvasY };
+    }
+
+    return { x, y };
+}
+
+/**
+ * Calculates the bounding box dimensions across all projected nodes to center the map.
+ */
+function calculateMapBounds(nodes) {
+    if (!nodes || nodes.length === 0) {
+        return { centerX: 0, centerY: 0, width: 1200, height: 950 };
+    }
+
+    // If nodes are projected from Miami WGS84 bounds, keep 1:1 alignment with miami-dark-map.png
+    const hasGeoNodes = nodes.some(
+        n => n.rawX <= -79.0 && n.rawX >= -82.0 && n.rawY >= 24.5 && n.rawY <= 27.0
+    );
+    if (hasGeoNodes) {
+        return { centerX: 0, centerY: 0, width: 1200, height: 950 };
+    }
+
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    nodes.forEach(n => {
+        if (n.x < minX) minX = n.x;
+        if (n.x > maxX) maxX = n.x;
+        if (n.y < minY) minY = n.y;
+        if (n.y > maxY) maxY = n.y;
+    });
+
+    const padding = 220;
+    const width = Math.max(800, (maxX - minX) + padding * 2);
+    const height = Math.max(650, (maxY - minY) + padding * 2);
+    return {
+        centerX: (minX + maxX) / 2,
+        centerY: (minY + maxY) / 2,
+        width,
+        height
+    };
+}
 
 /**
  * Returns distinct dark-terminal colors based on the node's infrastructure type.
@@ -70,7 +152,6 @@ function getNodeColorByType(nodeType = '') {
         };
     }
 
-    // Default dark-terminal node theme
     return {
         background: '#161b22',
         border: '#58a6ff',
@@ -95,7 +176,7 @@ function appendLog(text, type = 'system-msg') {
 }
 
 /**
- * Updates the sidebar telemetry counters if present in the DOM.
+ * Updates the sidebar telemetry counters.
  */
 function updateTelemetry({ state, evaluated, total, failed, survived }) {
     const statState = document.getElementById('stat-state');
@@ -130,15 +211,15 @@ function resetGraphState() {
     const nodeUpdates = topologyNodes.map(node => ({
         id: node.id,
         label: node.name,
-        size: 18,
+        size: 16,
         color: getNodeColorByType(node.type)
     }));
     nodesDataSet.update(nodeUpdates);
 
     const edgeUpdates = edgesDataSet.get().map(edge => ({
         id: edge.id,
-        width: 1.6,
-        color: { color: '#30363d', highlight: '#00ff00', hover: '#58a6ff' }
+        width: 1.5,
+        color: { color: 'rgba(88, 166, 255, 0.28)', highlight: '#00ff00', hover: '#58a6ff' }
     }));
     edgesDataSet.update(edgeUpdates);
 
@@ -172,7 +253,7 @@ function setEpicenterInput(nodeIdentifier, focusCanvas = false) {
         resetGraphState();
         nodesDataSet.update({
             id: nodeIdentifier,
-            size: 24,
+            size: 22,
             color: {
                 background: '#0d261a',
                 border: '#00ff00',
@@ -183,7 +264,7 @@ function setEpicenterInput(nodeIdentifier, focusCanvas = false) {
             network.selectNodes([nodeIdentifier]);
             if (focusCanvas) {
                 network.focus(nodeIdentifier, {
-                    scale: 1.05,
+                    scale: 1.15,
                     animation: { duration: 350, easingFunction: 'easeInOutQuad' }
                 });
             }
@@ -192,8 +273,8 @@ function setEpicenterInput(nodeIdentifier, focusCanvas = false) {
 }
 
 /**
- * Task 1: Fetch initial infrastructure graph from GET /api/v1/topology
- * and initialize vis.Network on #network-canvas with physics enabled.
+ * Task 1 & Task 2: Fetch topology from GET /api/v1/topology, render synchronized
+ * Miami map in network.on("beforeDrawing"), and lock node positions with pan/zoom enabled.
  */
 async function fetchAndRenderTopology() {
     const container = document.getElementById('network-canvas');
@@ -201,7 +282,7 @@ async function fetchAndRenderTopology() {
     const epicenterInput = document.getElementById('epicenter-node');
 
     try {
-        appendLog('Fetching city infrastructure topology from /api/v1/topology...', 'system-msg');
+        appendLog('Fetching Miami infrastructure topology from /api/v1/topology...', 'system-msg');
         const response = await fetch('/api/v1/topology');
         if (!response.ok) {
             throw new Error(`Failed to fetch topology (HTTP ${response.status})`);
@@ -211,34 +292,45 @@ async function fetchAndRenderTopology() {
         const rawNodes = Array.isArray(data.nodes) ? data.nodes : [];
         const rawEdges = Array.isArray(data.edges) ? data.edges : [];
 
-        // Normalize backend nodes (supports id, name, type)
+        // Normalize backend nodes and project spatial coordinates onto canvas
         topologyNodes = rawNodes.map(node => {
             const nodeName = node.name || node.label || String(node.id);
             const nodeId = String(node.id ?? nodeName);
             const nodeType = node.type || node.group || 'infrastructure';
+            const rawX = Number(node.x ?? 0);
+            const rawY = Number(node.y ?? 0);
+            const projected = projectNodeCoordinates(rawX, rawY);
+
             return {
                 id: nodeId,
                 name: nodeName,
-                type: nodeType
+                type: nodeType,
+                rawX,
+                rawY,
+                x: projected.x,
+                y: projected.y
             };
         });
+
+        mapBounds = calculateMapBounds(topologyNodes);
 
         if (nodeCountBadge) {
             nodeCountBadge.textContent = `${topologyNodes.length} nodes`;
         }
 
-        // Map backend nodes into vis.DataSet with sector-specific dark-terminal colors
+        // Map backend nodes into vis.DataSet with locked geographic coordinates
         nodesDataSet = new vis.DataSet(
             topologyNodes.map(node => ({
                 id: node.id,
                 label: node.name,
-                title: `${node.name} [Type: ${node.type}]`,
+                title: `${node.name} [${node.type.toUpperCase()}] (${node.rawY.toFixed(4)}, ${node.rawX.toFixed(4)})`,
                 group: node.type,
+                x: node.x,
+                y: node.y,
                 color: getNodeColorByType(node.type)
             }))
         );
 
-        // Map backend edges (source -> from, target -> to) into vis.DataSet
         edgesDataSet = new vis.DataSet(
             rawEdges.map((edge, idx) => ({
                 id: `edge_${idx}`,
@@ -247,46 +339,38 @@ async function fetchAndRenderTopology() {
             }))
         );
 
+        // Task 2: Disable node dragging while enabling pan (dragView) and zoom (zoomView)
         const options = {
             nodes: {
                 shape: 'dot',
-                size: 18,
+                size: 16,
                 font: {
-                    color: '#c9d1d9',
-                    size: 13,
+                    color: '#e6edf3',
+                    size: 12,
                     face: 'Courier New',
                     strokeWidth: 3,
-                    strokeColor: '#0d1117'
+                    strokeColor: '#060c14'
                 },
                 borderWidth: 2,
                 shadow: {
                     enabled: true,
-                    color: 'rgba(0, 0, 0, 0.65)',
+                    color: 'rgba(0, 0, 0, 0.75)',
                     size: 8
                 }
             },
             edges: {
-                width: 1.6,
-                color: { color: '#30363d', highlight: '#00ff00', hover: '#58a6ff' },
-                arrows: { to: { enabled: true, scaleFactor: 0.65 } },
+                width: 1.5,
+                color: { color: 'rgba(88, 166, 255, 0.28)', highlight: '#00ff00', hover: '#58a6ff' },
+                arrows: { to: { enabled: true, scaleFactor: 0.6 } },
                 smooth: { type: 'continuous' }
             },
             physics: {
-                enabled: true,
-                solver: 'forceAtlas2Based',
-                forceAtlas2Based: {
-                    gravitationalConstant: -90,
-                    centralGravity: 0.012,
-                    springLength: 160,
-                    springConstant: 0.08,
-                    damping: 0.45
-                },
-                stabilization: {
-                    enabled: true,
-                    iterations: 180
-                }
+                enabled: false
             },
             interaction: {
+                dragNodes: false,
+                dragView: true,
+                zoomView: true,
                 hover: true,
                 tooltipDelay: 150
             }
@@ -298,7 +382,21 @@ async function fetchAndRenderTopology() {
             options
         );
 
-        // Task 2: Hook up onclick listener on vis.Network to update 'Epicenter Node' input
+        // Task 1: Draw the preloaded Miami dark map centered on the bounding box before drawing nodes
+        network.on('beforeDrawing', function (ctx) {
+            if (mapImage.complete && mapImage.naturalWidth > 0) {
+                const drawX = mapBounds.centerX - mapBounds.width / 2;
+                const drawY = mapBounds.centerY - mapBounds.height / 2;
+                ctx.save();
+                ctx.drawImage(mapImage, drawX, drawY, mapBounds.width, mapBounds.height);
+                ctx.strokeStyle = 'rgba(88, 166, 255, 0.25)';
+                ctx.lineWidth = 1.5;
+                ctx.strokeRect(drawX, drawY, mapBounds.width, mapBounds.height);
+                ctx.restore();
+            }
+        });
+
+        // Update 'Epicenter Node' when user taps/clicks a node on the canvas
         network.on('click', (params) => {
             if (params.nodes && params.nodes.length > 0 && !isSimulating) {
                 const clickedNodeId = params.nodes[0];
@@ -313,6 +411,8 @@ async function fetchAndRenderTopology() {
             }
         });
 
+        network.fit({ animation: { duration: 400 } });
+
         updateTelemetry({
             state: 'READY',
             evaluated: 0,
@@ -321,7 +421,6 @@ async function fetchAndRenderTopology() {
             survived: 0
         });
 
-        // Populate default epicenter node if empty or not in graph
         if (topologyNodes.length > 0 && epicenterInput) {
             const currentVal = epicenterInput.value.trim();
             const exists = topologyNodes.some(n => n.name === currentVal || n.id === currentVal);
@@ -330,7 +429,7 @@ async function fetchAndRenderTopology() {
         }
 
         appendLog(
-            `Rendered topology: ${topologyNodes.length} nodes and ${rawEdges.length} directed edges.`,
+            `Rendered Miami map topology: ${topologyNodes.length} nodes and ${rawEdges.length} directed edges.`,
             'system-msg'
         );
     } catch (error) {
@@ -339,8 +438,7 @@ async function fetchAndRenderTopology() {
 }
 
 /**
- * Task 2: Trigger POST /api/v1/simulate with selected Disaster Type and Epicenter Node,
- * then animate the cascade trace on the vis.Network graph.
+ * Trigger POST /api/v1/simulate and animate the cascade trace on the map.
  */
 async function runSimulation() {
     if (isSimulating) return;
@@ -353,6 +451,8 @@ async function runSimulation() {
     const loadingSpinner = document.getElementById('loading-spinner');
     const consoleLog = document.getElementById('console-log');
     const dropdown = document.getElementById('epicenter-dropdown');
+    const sidebar = document.getElementById('control-sidebar');
+    const sidebarToggleBtn = document.getElementById('sidebar-toggle-btn');
 
     const disasterType = disasterSelect ? disasterSelect.value : 'Hurricane';
     const magnitude = (magnitudeInput && magnitudeInput.value.trim()) ? magnitudeInput.value.trim() : 'Category 5';
@@ -363,7 +463,6 @@ async function runSimulation() {
         return;
     }
 
-    // Match user input to a known node name/ID (case-insensitive / partial match)
     const exactNode = topologyNodes.find(
         n => n.name.toLowerCase() === epicenterNode.toLowerCase() ||
              n.id.toLowerCase() === epicenterNode.toLowerCase()
@@ -377,6 +476,12 @@ async function runSimulation() {
     } else if (partialNode) {
         epicenterNode = partialNode.name;
         epicenterInput.value = epicenterNode;
+    }
+
+    // On mobile viewports, auto-collapse the floating control card so the map is visible during playback
+    if (window.innerWidth <= 768 && sidebar && !sidebar.classList.contains('collapsed')) {
+        sidebar.classList.add('collapsed');
+        if (sidebarToggleBtn) sidebarToggleBtn.textContent = '[ CONTROLS ▼ ]';
     }
 
     isSimulating = true;
@@ -452,12 +557,11 @@ async function animateExecutionTrace(trace) {
         const matchingNode = topologyNodes.find(n => n.name === nodeName || n.id === nodeName);
         const nodeId = matchingNode ? matchingNode.id : nodeName;
 
-        // 1. Highlight node as currently being evaluated
         if (nodesDataSet && nodesDataSet.get(nodeId)) {
             nodesDataSet.update({
                 id: nodeId,
                 label: `${nodeName}\n[EVALUATING...]`,
-                size: 25,
+                size: 23,
                 color: {
                     background: '#d29922',
                     border: '#f0e68c'
@@ -465,14 +569,13 @@ async function animateExecutionTrace(trace) {
             });
 
             network.focus(nodeId, {
-                scale: 1.05,
+                scale: 1.1,
                 animation: { duration: 400, easingFunction: 'easeInOutQuad' }
             });
         }
 
-        await new Promise(resolve => setTimeout(resolve, 450));
+        await new Promise(resolve => setTimeout(resolve, 420));
 
-        // 2. Update node to FAILED (red) or SURVIVED (green)
         const survived = Boolean(step.status);
         if (survived) {
             survivedCount++;
@@ -491,12 +594,11 @@ async function animateExecutionTrace(trace) {
             nodesDataSet.update({
                 id: nodeId,
                 label: `${nodeName}\n${statusBadge}`,
-                size: survived ? 21 : 24,
+                size: survived ? 19 : 22,
                 color: statusColor
             });
         }
 
-        // Color the cascading dependency edge
         if (edgesDataSet) {
             const matchingEdges = edgesDataSet.get().filter(edge => {
                 if (step.parent_node) {
@@ -535,7 +637,7 @@ async function animateExecutionTrace(trace) {
             logClass
         );
 
-        await new Promise(resolve => setTimeout(resolve, 650));
+        await new Promise(resolve => setTimeout(resolve, 600));
     }
 
     updateTelemetry({
@@ -610,7 +712,7 @@ function renderEpicenterDropdown(filterText = '') {
 }
 
 /**
- * Initialize DOM event listeners and fetch initial topology on DOMContentLoaded.
+ * Initialize DOM event listeners, mobile drawer toggles, and topology on DOMContentLoaded.
  */
 document.addEventListener('DOMContentLoaded', () => {
     fetchAndRenderTopology();
@@ -622,6 +724,33 @@ document.addEventListener('DOMContentLoaded', () => {
     const dropdown = document.getElementById('epicenter-dropdown');
     const quickChipsContainer = document.getElementById('quick-epicenters');
 
+    // Mobile control card & collapsible terminal elements
+    const sidebar = document.getElementById('control-sidebar');
+    const sidebarToggleBtn = document.getElementById('sidebar-toggle-btn');
+    const consoleDrawer = document.getElementById('console-drawer');
+    const consoleHeader = document.getElementById('console-header');
+    const consoleToggleBtn = document.getElementById('console-toggle-btn');
+
+    // Default console to collapsed on mobile so it doesn't obscure the map
+    if (window.innerWidth <= 768 && consoleDrawer && consoleToggleBtn) {
+        consoleDrawer.classList.add('collapsed');
+        consoleToggleBtn.textContent = '[ EXPAND ▲ ]';
+    }
+
+    if (sidebarToggleBtn && sidebar) {
+        sidebarToggleBtn.addEventListener('click', () => {
+            const isCollapsed = sidebar.classList.toggle('collapsed');
+            sidebarToggleBtn.textContent = isCollapsed ? '[ CONTROLS ▼ ]' : '[ HIDE ▲ ]';
+        });
+    }
+
+    if (consoleHeader && consoleDrawer && consoleToggleBtn) {
+        consoleHeader.addEventListener('click', () => {
+            const isCollapsed = consoleDrawer.classList.toggle('collapsed');
+            consoleToggleBtn.textContent = isCollapsed ? '[ EXPAND ▲ ]' : '[ COLLAPSE ▼ ]';
+        });
+    }
+
     if (runBtn) {
         runBtn.addEventListener('click', runSimulation);
     }
@@ -631,7 +760,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (isSimulating) return;
             resetGraphState();
             if (network) network.fit({ animation: { duration: 500 } });
-            appendLog('[RESET] Topology state reset to standby.', 'system-msg');
+            appendLog('[RESET] Map and topology state reset to standby.', 'system-msg');
         });
     }
 
