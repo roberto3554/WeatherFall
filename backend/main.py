@@ -18,11 +18,13 @@ try:
     from .database import get_db, init_db
     from .models import Edge, Node, SimulationTrace
     from .schemas import NodeState, SimulationRequest
+    from .seed_data import MIAMI_EDGES, MIAMI_NODES
 except ImportError:
     from agent import evaluate_node_failure
     from database import get_db, init_db
     from models import Edge, Node, SimulationTrace
     from schemas import NodeState, SimulationRequest
+    from seed_data import MIAMI_EDGES, MIAMI_NODES
 
 
 @asynccontextmanager
@@ -40,8 +42,8 @@ FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 
 app = FastAPI(
     title="WeatherFall API",
-    description="AI-driven climate risk cascade simulation API.",
-    version="1.0.0",
+    description="AI-driven climate risk cascade simulation API (Miami Infrastructure Edition).",
+    version="1.1.0",
     lifespan=lifespan,
 )
 
@@ -58,61 +60,48 @@ app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
 def build_base_infrastructure_graph() -> nx.DiGraph:
     """
-    Initializes a static NetworkX DiGraph representing core city infrastructure
-    with at least 6 interconnected nodes and their 'type' attributes.
+    Initializes a static NetworkX DiGraph representing real-world Miami infrastructure
+    with node types and spatial (x, y) coordinates.
     """
     graph = nx.DiGraph()
 
-    nodes: list[tuple[str, dict[str, str]]] = [
-        ("Power Grid", {"type": "energy"}),
-        ("Substation Alpha", {"type": "energy"}),
-        ("Water Pump", {"type": "water"}),
-        ("Wastewater Plant", {"type": "water"}),
-        ("Telecom Tower", {"type": "comms"}),
-        ("Emergency Dispatch", {"type": "public_safety"}),
-        ("City Hospital", {"type": "healthcare"}),
-        ("Regional Data Center", {"type": "it"}),
-    ]
-    graph.add_nodes_from(nodes)
+    for item in MIAMI_NODES:
+        graph.add_node(
+            item["name"],
+            type=item["type"],
+            x=item["x"],
+            y=item["y"],
+        )
 
-    edges: list[tuple[str, str]] = [
-        ("Power Grid", "Substation Alpha"),
-        ("Power Grid", "Water Pump"),
-        ("Power Grid", "Telecom Tower"),
-        ("Substation Alpha", "City Hospital"),
-        ("Substation Alpha", "Regional Data Center"),
-        ("Water Pump", "City Hospital"),
-        ("Water Pump", "Wastewater Plant"),
-        ("Telecom Tower", "Emergency Dispatch"),
-        ("Telecom Tower", "Regional Data Center"),
-        ("Emergency Dispatch", "City Hospital"),
-        ("Regional Data Center", "Emergency Dispatch"),
-    ]
-    graph.add_edges_from(edges)
-
+    graph.add_edges_from(MIAMI_EDGES)
     return graph
 
 
 async def load_infrastructure_graph(db: AsyncSession) -> nx.DiGraph:
     """
-    Initializes the base NetworkX DiGraph and enriches it with any additional
-    nodes and directed edges stored in PostgreSQL.
+    Loads the city infrastructure graph from PostgreSQL into a NetworkX DiGraph,
+    falling back to the default Miami graph if the database is empty or unreachable.
     """
-    graph = build_base_infrastructure_graph()
-
     try:
         nodes_result = await db.execute(select(Node))
         db_nodes = list(nodes_result.scalars().all())
         if not db_nodes:
-            return graph
+            return build_base_infrastructure_graph()
 
         edges_result = await db.execute(select(Edge))
         db_edges = list(edges_result.scalars().all())
 
+        graph = nx.DiGraph()
         id_to_name: dict[int, str] = {}
         for node in db_nodes:
             id_to_name[node.id] = node.name
-            graph.add_node(node.name, id=node.id, type=node.type)
+            graph.add_node(
+                node.name,
+                id=node.id,
+                type=node.type,
+                x=node.x if node.x is not None else 0.0,
+                y=node.y if node.y is not None else 0.0,
+            )
 
         for edge in db_edges:
             source_name = id_to_name.get(edge.source_node_id)
@@ -120,14 +109,9 @@ async def load_infrastructure_graph(db: AsyncSession) -> nx.DiGraph:
             if source_name and target_name:
                 graph.add_edge(source_name, target_name)
 
-        # Bridge base 'Power Grid' and seeded 'Main Power Grid' if both exist
-        if "Main Power Grid" in graph and "Power Grid" in graph:
-            graph.add_edge("Power Grid", "Main Power Grid")
-
+        return graph
     except Exception:
-        pass
-
-    return graph
+        return build_base_infrastructure_graph()
 
 
 @app.get("/")
@@ -137,8 +121,8 @@ async def serve_index() -> FileResponse:
 
 
 @app.get("/api/v1/topology")
-async def get_topology(db: AsyncSession = Depends(get_db)) -> dict[str, list[dict[str, str]]]:
-    """Returns the city infrastructure graph (nodes and edges) for frontend visualization."""
+async def get_topology(db: AsyncSession = Depends(get_db)) -> dict[str, list[dict[str, Any]]]:
+    """Returns the real-world city infrastructure graph (nodes with x/y and directed edges)."""
     graph = await load_infrastructure_graph(db)
 
     nodes_list = [
@@ -148,6 +132,8 @@ async def get_topology(db: AsyncSession = Depends(get_db)) -> dict[str, list[dic
             "label": str(node),
             "type": str(data.get("type", "unknown")),
             "group": str(data.get("type", "unknown")),
+            "x": float(data.get("x", 0.0)),
+            "y": float(data.get("y", 0.0)),
         }
         for node, data in graph.nodes(data=True)
     ]
@@ -170,11 +156,11 @@ async def simulate_cascade(
 ) -> list[dict[str, Any]]:
     """
     Executes an async Breadth-First Search (BFS) cascade simulation starting from
-    `epicenter_node`, evaluates downstream nodes with Groq LLM, persists the JSON
-    trace to PostgreSQL, and returns the execution trace.
+    `epicenter_node`, propagates `magnitude` into every Groq LLM node evaluation,
+    persists the JSON trace (with magnitude) to PostgreSQL, and returns the trace.
     """
-    # Task 1: Initialize the NetworkX DiGraph with typed infrastructure nodes
     graph: nx.DiGraph = await load_infrastructure_graph(db)
+    magnitude: str = request.magnitude
 
     if request.epicenter_node not in graph:
         valid_nodes = list(graph.nodes)
@@ -186,7 +172,6 @@ async def simulate_cascade(
             ),
         )
 
-    # Task 2: Initialize BFS queue starting at epicenter_node (assumed failed: status=False)
     bfs_queue: deque[str] = deque([request.epicenter_node])
     visited: set[str] = {request.epicenter_node}
 
@@ -197,9 +182,11 @@ async def simulate_cascade(
             "child_node": request.epicenter_node,
             "node_name": request.epicenter_node,
             "node_type": epicenter_type,
+            "magnitude": magnitude,
             "status": False,
             "reasoning": (
-                f"Epicenter node '{request.epicenter_node}' failed directly due to {request.disaster_type}."
+                f"Direct epicenter hit from {request.disaster_type} ({magnitude}) "
+                f"caused immediate failure at {request.epicenter_node}."
             ),
         }
     ]
@@ -208,7 +195,6 @@ async def simulate_cascade(
         parent_name = bfs_queue.popleft()
 
         for child_name in graph.successors(parent_name):
-            # Prevent infinite loops in cyclic infrastructure graphs
             if child_name in visited:
                 continue
             visited.add(child_name)
@@ -221,6 +207,7 @@ async def simulate_cascade(
                     node_type=child_type,
                     parent_name=parent_name,
                     disaster_type=request.disaster_type,
+                    magnitude=magnitude,
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -234,21 +221,23 @@ async def simulate_cascade(
                     "child_node": child_name,
                     "node_name": child_name,
                     "node_type": child_type,
+                    "magnitude": magnitude,
                     "status": child_status,
                     "reasoning": reasoning,
                 }
             )
 
-            # Only continue the cascade down this branch if the child node failed (status == False)
+            # Continue the cascade down this branch only if the child node failed (status == False)
             if child_status is False:
                 bfs_queue.append(child_name)
 
-    # Task 3: Serialize execution_trace to JSON and persist in PostgreSQL SimulationTrace
+    # Serialize execution_trace + magnitude metadata and persist in PostgreSQL SimulationTrace
     serialized_trace: str = json.dumps(execution_trace)
 
     try:
         trace_record = SimulationTrace(
             disaster_type=request.disaster_type,
+            magnitude=magnitude,
             epicenter_node=request.epicenter_node,
             trace_data=json.loads(serialized_trace),
         )
