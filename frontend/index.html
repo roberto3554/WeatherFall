@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>WeatherFall - Miami Climate Risk Cascade Simulator</title>
     <!-- vis-network CDN -->
     <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
@@ -10,92 +10,103 @@
 </head>
 <body>
     <div class="layout-container">
-        <!-- Sidebar -->
-        <aside class="sidebar">
-            <h1 class="logo">WeatherFall<span>_</span></h1>
-            <p class="subtitle">Miami Infrastructure Cascade Engine</p>
-
-            <div class="control-group">
-                <label for="disaster-type">Disaster Type</label>
-                <select id="disaster-type">
-                    <option value="Hurricane">Hurricane</option>
-                    <option value="Coastal Storm Surge & Flash Flood">Coastal Storm Surge & Flash Flood</option>
-                    <option value="Tornado Outbreak">Tornado Outbreak</option>
-                    <option value="Extreme Heatwave & Grid Brownout">Extreme Heatwave & Grid Brownout</option>
-                </select>
-            </div>
-
-            <div class="control-group">
-                <label for="disaster-magnitude">Disaster Magnitude</label>
-                <input
-                    type="text"
-                    id="disaster-magnitude"
-                    list="magnitude-presets"
-                    value="Category 5 (165 mph, +4.2m surge)"
-                    placeholder="e.g. Category 5, EF-3, Water level +2.5m"
-                >
-                <datalist id="magnitude-presets">
-                    <option value="Category 5 (165 mph, +4.2m surge)"></option>
-                    <option value="Water level +2.5m"></option>
-                    <option value="EF-3 (155 mph winds)"></option>
-                    <option value="Category 3 (120 mph, +1.8m surge)"></option>
-                    <option value="Heat Index 46°C (Peak Load 135%)"></option>
-                </datalist>
-            </div>
-
-            <div class="control-group search-group">
-                <div class="label-row">
-                    <label for="epicenter-node">Epicenter Node (Miami, FL)</label>
-                    <span id="node-count-badge" class="badge">0 nodes</span>
+        <!-- Sidebar / Mobile Floating Control Card -->
+        <aside id="control-sidebar" class="sidebar">
+            <div class="sidebar-header">
+                <div>
+                    <h1 class="logo">WeatherFall<span>_</span></h1>
+                    <p class="subtitle">Miami Infrastructure Cascade Engine</p>
                 </div>
-                <div class="search-input-wrapper">
+                <button type="button" id="sidebar-toggle-btn" class="mobile-toggle-btn" aria-label="Toggle Controls">
+                    [ HIDE ]
+                </button>
+            </div>
+
+            <div id="sidebar-body" class="sidebar-body">
+                <div class="control-group">
+                    <label for="disaster-type">Disaster Type</label>
+                    <select id="disaster-type">
+                        <option value="Hurricane">Hurricane</option>
+                        <option value="Coastal Storm Surge & Flash Flood">Coastal Storm Surge & Flash Flood</option>
+                        <option value="Tornado Outbreak">Tornado Outbreak</option>
+                        <option value="Extreme Heatwave & Grid Brownout">Extreme Heatwave & Grid Brownout</option>
+                    </select>
+                </div>
+
+                <div class="control-group">
+                    <label for="disaster-magnitude">Disaster Magnitude</label>
                     <input
                         type="text"
-                        id="epicenter-node"
-                        placeholder="Search OSM Miami facility or sector..."
-                        value="Downtown Substation"
-                        autocomplete="off"
+                        id="disaster-magnitude"
+                        list="magnitude-presets"
+                        value="Category 5 (165 mph, +4.2m surge)"
+                        placeholder="e.g. Category 5, EF-3, Water level +2.5m"
                     >
-                    <button type="button" id="clear-search-btn" class="clear-btn" title="Show all nodes">&times;</button>
+                    <datalist id="magnitude-presets">
+                        <option value="Category 5 (165 mph, +4.2m surge)"></option>
+                        <option value="Water level +2.5m"></option>
+                        <option value="EF-3 (155 mph winds)"></option>
+                        <option value="Category 3 (120 mph, +1.8m surge)"></option>
+                        <option value="Heat Index 46°C (Peak Load 135%)"></option>
+                    </datalist>
                 </div>
-                <!-- Searchable interactive dropdown list of topology nodes -->
-                <div id="epicenter-dropdown" class="epicenter-dropdown hidden"></div>
-                <small class="hint-text">Tip: Type to filter or click any node on the graph.</small>
-            </div>
 
-            <div class="control-group">
-                <label>Quick-Select OSM Miami Epicenters</label>
-                <div id="quick-epicenters" class="quick-chips">
-                    <button type="button" class="chip" data-node="Downtown Substation">Downtown Sub</button>
-                    <button type="button" class="chip" data-node="Miami Beach Substation">Miami Beach Sub</button>
-                    <button type="button" class="chip" data-node="Virginia Key Substation">Virginia Key Sub</button>
-                    <button type="button" class="chip" data-node="Coconut Grove Substation">Coconut Grove Sub</button>
+                <div class="control-group search-group">
+                    <div class="label-row">
+                        <label for="epicenter-node">Epicenter Node (Miami, FL)</label>
+                        <span id="node-count-badge" class="badge">0 nodes</span>
+                    </div>
+                    <div class="search-input-wrapper">
+                        <input
+                            type="text"
+                            id="epicenter-node"
+                            placeholder="Search OSM Miami facility or sector..."
+                            value="Downtown Substation"
+                            autocomplete="off"
+                        >
+                        <button type="button" id="clear-search-btn" class="clear-btn" title="Show all nodes">&times;</button>
+                    </div>
+                    <!-- Searchable interactive dropdown list of topology nodes -->
+                    <div id="epicenter-dropdown" class="epicenter-dropdown hidden"></div>
+                    <small class="hint-text">Tip: Tap any node on the map or type to filter.</small>
                 </div>
-            </div>
 
-            <button id="run-btn" class="run-button">[ EXECUTE SIMULATION ]</button>
-            <button id="reset-btn" class="reset-button">[ RESET TOPOLOGY ]</button>
-            <div id="loading-spinner" class="hidden">Executing cascade analysis...</div>
+                <div class="control-group">
+                    <label>Quick-Select OSM Miami Epicenters</label>
+                    <div id="quick-epicenters" class="quick-chips">
+                        <button type="button" class="chip" data-node="Downtown Substation">Downtown Sub</button>
+                        <button type="button" class="chip" data-node="Miami Beach Substation">Miami Beach Sub</button>
+                        <button type="button" class="chip" data-node="Virginia Key Substation">Virginia Key Sub</button>
+                        <button type="button" class="chip" data-node="Coconut Grove Substation">Coconut Grove Sub</button>
+                    </div>
+                </div>
 
-            <!-- Telemetry Summary Box -->
-            <div class="telemetry-panel">
-                <div class="telemetry-title">CASCADE TELEMETRY</div>
-                <div class="telemetry-grid">
-                    <div class="telemetry-item">
-                        <span class="t-label">STATE</span>
-                        <span id="stat-state" class="t-value state-idle">READY</span>
-                    </div>
-                    <div class="telemetry-item">
-                        <span class="t-label">EVALUATED</span>
-                        <span id="stat-evaluated" class="t-value">0 / 0</span>
-                    </div>
-                    <div class="telemetry-item">
-                        <span class="t-label">FAILED</span>
-                        <span id="stat-failed" class="t-value val-fail">0</span>
-                    </div>
-                    <div class="telemetry-item">
-                        <span class="t-label">SURVIVED</span>
-                        <span id="stat-survived" class="t-value val-survive">0</span>
+                <div class="button-row">
+                    <button id="run-btn" class="run-button">[ EXECUTE SIMULATION ]</button>
+                    <button id="reset-btn" class="reset-button">[ RESET MAP ]</button>
+                </div>
+                <div id="loading-spinner" class="hidden">Executing cascade analysis...</div>
+
+                <!-- Telemetry Summary Box -->
+                <div class="telemetry-panel">
+                    <div class="telemetry-title">CASCADE TELEMETRY</div>
+                    <div class="telemetry-grid">
+                        <div class="telemetry-item">
+                            <span class="t-label">STATE</span>
+                            <span id="stat-state" class="t-value state-idle">READY</span>
+                        </div>
+                        <div class="telemetry-item">
+                            <span class="t-label">EVALUATED</span>
+                            <span id="stat-evaluated" class="t-value">0 / 0</span>
+                        </div>
+                        <div class="telemetry-item">
+                            <span class="t-label">FAILED</span>
+                            <span id="stat-failed" class="t-value val-fail">0</span>
+                        </div>
+                        <div class="telemetry-item">
+                            <span class="t-label">SURVIVED</span>
+                            <span id="stat-survived" class="t-value val-survive">0</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -105,16 +116,27 @@
         <main class="workspace">
             <div class="canvas-wrapper">
                 <div class="canvas-legend">
-                    <span class="legend-item"><i class="dot dot-default"></i> Online / Standby</span>
-                    <span class="legend-item"><i class="dot dot-active"></i> Evaluating</span>
-                    <span class="legend-item"><i class="dot dot-fail"></i> Failed (Cascade)</span>
-                    <span class="legend-item"><i class="dot dot-survive"></i> Survived (Backup)</span>
+                    <span class="legend-item"><i class="dot dot-energy"></i> Energy</span>
+                    <span class="legend-item"><i class="dot dot-health"></i> Health</span>
+                    <span class="legend-item"><i class="dot dot-comms"></i> Comms</span>
+                    <span class="legend-item"><i class="dot dot-fail"></i> Failed</span>
+                    <span class="legend-item"><i class="dot dot-survive"></i> Survived</span>
                 </div>
                 <div id="network-canvas"></div>
             </div>
-            <div id="console-log">
-                <div class="log-line system-msg">SYSTEM: Awaiting Miami simulation parameters...</div>
-            </div>
+
+            <!-- Collapsible Terminal Drawer -->
+            <section id="console-drawer" class="console-drawer">
+                <div id="console-header" class="console-header">
+                    <span class="console-title">&gt;_ EXECUTION TRACE TERMINAL</span>
+                    <button type="button" id="console-toggle-btn" class="console-toggle-btn">
+                        [ COLLAPSE ▼ ]
+                    </button>
+                </div>
+                <div id="console-log">
+                    <div class="log-line system-msg">SYSTEM: Awaiting Miami simulation parameters...</div>
+                </div>
+            </section>
         </main>
     </div>
     <script src="/static/app.js"></script>
