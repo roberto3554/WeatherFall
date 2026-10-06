@@ -114,17 +114,21 @@ async def simulate_cascade(
     execution_trace: list[NodeState] = []
     visited: set[str] = {request.epicenter_node}
 
-    # Queue stores tuples of (current_node, parent_status)
+    # Queue stores tuples of (current_node, parent_status, parent_name)
     # The epicenter node receives parent_status=False as it absorbs the direct disaster impact.
-    bfs_queue: deque[tuple[str, bool]] = deque([(request.epicenter_node, False)])
+    bfs_queue: deque[tuple[str, bool, str]] = deque([(request.epicenter_node, False, "Primary Disaster Impact")])
 
     while bfs_queue:
-        current_node, parent_status = bfs_queue.popleft()
+        current_node, parent_status, parent_name = bfs_queue.popleft()
+        
+        child_type = graph.nodes[current_node].get("type", "Infrastructure")
 
         evaluation: dict[str, bool | str] = await evaluate_node_failure(
-            node=current_node,
+            child_name=current_node,
+            child_type=child_type,
             disaster_type=request.disaster_type,
             parent_status=parent_status,
+            parent_name=parent_name,
         )
 
         current_status = bool(evaluation["status"])
@@ -138,7 +142,7 @@ async def simulate_cascade(
         for neighbor in graph.successors(current_node):
             if neighbor not in visited:
                 visited.add(neighbor)
-                bfs_queue.append((neighbor, current_status))
+                bfs_queue.append((neighbor, current_status, current_node))
 
     # Persist simulation execution trace to PostgreSQL when DB is active
     if loaded_from_db:
