@@ -1,6 +1,14 @@
+# Virtual Environment & Python Bytecode
 .venv/
+venv/
 __pycache__/
 *.py[cod]
+
+# Environment Variables & Secrets (NEVER commit)
 .env
+.env.*
+!.env.example
+
+# Generated Simulation Traces
 data/trace_*.json
 data/latest_trace.json

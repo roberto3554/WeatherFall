@@ -27,9 +27,12 @@ services:
       - "8000:8000"
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-weatherfall}:${POSTGRES_PASSWORD:-weatherfall_pass}@db:5432/${POSTGRES_DB:-weatherfall_db}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-20b}
     volumes:
       - ./backend:/app/backend
       - ./data:/app/data
+      - ./frontend:/app/frontend
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
     depends_on:
       db:

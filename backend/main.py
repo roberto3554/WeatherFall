@@ -30,6 +30,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     yield
 
 
+import os
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+# Resolve paths
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
+
 app = FastAPI(
     title="WeatherFall API",
     description="AI-driven climate risk cascade simulation API.",
@@ -44,6 +52,29 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount frontend directory for static assets
+app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+
+@app.get("/")
+async def serve_index():
+    """Serves the frontend index.html application."""
+    return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
+
+@app.get("/api/v1/topology")
+async def get_topology(db: AsyncSession = Depends(get_db)):
+    """Returns the city infrastructure graph (nodes and edges) for frontend visualization."""
+    graph, _ = await load_infrastructure_graph(db)
+    
+    nodes_list = []
+    for node, data in graph.nodes(data=True):
+        nodes_list.append({"id": node, "label": node, "group": data.get("type", "Unknown")})
+        
+    edges_list = []
+    for source, target in graph.edges():
+        edges_list.append({"from": source, "to": target})
+        
+    return {"nodes": nodes_list, "edges": edges_list}
 
 
 def build_fallback_graph() -> nx.DiGraph:
@@ -120,16 +151,24 @@ async def simulate_cascade(
 
     while bfs_queue:
         current_node, parent_status, parent_name = bfs_queue.popleft()
-        
+
         child_type = graph.nodes[current_node].get("type", "Infrastructure")
 
-        evaluation: dict[str, bool | str] = await evaluate_node_failure(
-            child_name=current_node,
-            child_type=child_type,
-            disaster_type=request.disaster_type,
-            parent_status=parent_status,
-            parent_name=parent_name,
-        )
+        if parent_status:
+            evaluation: dict[str, bool | str] = {
+                "status": True,
+                "reasoning": f"'{current_node}' remained operational because upstream node '{parent_name}' survived.",
+            }
+        else:
+            try:
+                evaluation = await evaluate_node_failure(
+                    node_name=current_node,
+                    node_type=child_type,
+                    parent_name=parent_name,
+                    disaster_type=request.disaster_type,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
 
         current_status = bool(evaluation["status"])
         node_state = NodeState(
