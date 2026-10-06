@@ -346,6 +346,7 @@ async function runSimulation() {
     if (isSimulating) return;
 
     const disasterSelect = document.getElementById('disaster-type');
+    const magnitudeInput = document.getElementById('disaster-magnitude');
     const epicenterInput = document.getElementById('epicenter-node');
     const runBtn = document.getElementById('run-btn');
     const resetBtn = document.getElementById('reset-btn');
@@ -353,7 +354,8 @@ async function runSimulation() {
     const consoleLog = document.getElementById('console-log');
     const dropdown = document.getElementById('epicenter-dropdown');
 
-    const disasterType = disasterSelect ? disasterSelect.value : 'Category 5 Hurricane';
+    const disasterType = disasterSelect ? disasterSelect.value : 'Hurricane';
+    const magnitude = (magnitudeInput && magnitudeInput.value.trim()) ? magnitudeInput.value.trim() : 'Category 5';
     let epicenterNode = epicenterInput ? epicenterInput.value.trim() : '';
 
     if (!epicenterNode) {
@@ -395,7 +397,7 @@ async function runSimulation() {
     });
 
     appendLog(
-        `[INIT] Sending simulation request: disaster_type="${disasterType}", epicenter_node="${epicenterNode}"...`,
+        `[INIT] Simulating ${disasterType} (${magnitude}) at epicenter "${epicenterNode}"...`,
         'system-msg'
     );
 
@@ -405,6 +407,7 @@ async function runSimulation() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 disaster_type: disasterType,
+                magnitude: magnitude,
                 epicenter_node: epicenterNode
             })
         });
