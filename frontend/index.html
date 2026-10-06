@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WeatherFall - Climate Risk Cascade Simulator</title>
+    <!-- vis-network CDN -->
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="layout-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <h1 class="logo">WeatherFall<span>_</span></h1>
+            <p class="subtitle">AI-driven cascade simulation</p>
+
+            <div class="control-group">
+                <label for="disaster-type">Disaster Type</label>
+                <select id="disaster-type">
+                    <option value="Category 5 Hurricane">Category 5 Hurricane</option>
+                    <option value="Flash Flood">Flash Flood</option>
+                    <option value="9.0 Magnitude Earthquake">9.0 Magnitude Earthquake</option>
+                    <option value="Severe Cyber Attack">Severe Cyber Attack</option>
+                    <option value="Extreme Heatwave & Grid Overload">Extreme Heatwave & Grid Overload</option>
+                </select>
+            </div>
+
+            <div class="control-group search-group">
+                <div class="label-row">
+                    <label for="epicenter-node">Epicenter Node</label>
+                    <span id="node-count-badge" class="badge">0 nodes</span>
+                </div>
+                <div class="search-input-wrapper">
+                    <input
+                        type="text"
+                        id="epicenter-node"
+                        placeholder="Search node or sector (e.g. Dam, Power, Hospital)..."
+                        value="Hydroelectric Dam"
+                        autocomplete="off"
+                    >
+                    <button type="button" id="clear-search-btn" class="clear-btn" title="Show all nodes">&times;</button>
+                </div>
+                <!-- Searchable interactive dropdown list of topology nodes -->
+                <div id="epicenter-dropdown" class="epicenter-dropdown hidden"></div>
+                <small class="hint-text">Tip: Type to filter or click any node on the graph.</small>
+            </div>
+
+            <div class="control-group">
+                <label>Quick-Select Epicenters</label>
+                <div id="quick-epicenters" class="quick-chips">
+                    <button type="button" class="chip" data-node="Hydroelectric Dam">Hydro Dam</button>
+                    <button type="button" class="chip" data-node="Main Power Grid">Power Grid</button>
+                    <button type="button" class="chip" data-node="5G Telecom Tower">5G Tower</button>
+                    <button type="button" class="chip" data-node="Water Treatment Plant">Water Plant</button>
+                </div>
+            </div>
+
+            <button id="run-btn" class="run-button">[ EXECUTE SIMULATION ]</button>
+            <button id="reset-btn" class="reset-button">[ RESET TOPOLOGY ]</button>
+            <div id="loading-spinner" class="hidden">Executing cascade analysis...</div>
+
+            <!-- Telemetry Summary Box -->
+            <div class="telemetry-panel">
+                <div class="telemetry-title">CASCADE TELEMETRY</div>
+                <div class="telemetry-grid">
+                    <div class="telemetry-item">
+                        <span class="t-label">STATE</span>
+                        <span id="stat-state" class="t-value state-idle">READY</span>
+                    </div>
+                    <div class="telemetry-item">
+                        <span class="t-label">EVALUATED</span>
+                        <span id="stat-evaluated" class="t-value">0 / 0</span>
+                    </div>
+                    <div class="telemetry-item">
+                        <span class="t-label">FAILED</span>
+                        <span id="stat-failed" class="t-value val-fail">0</span>
+                    </div>
+                    <div class="telemetry-item">
+                        <span class="t-label">SURVIVED</span>
+                        <span id="stat-survived" class="t-value val-survive">0</span>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Workspace -->
+        <main class="workspace">
+            <div class="canvas-wrapper">
+                <div class="canvas-legend">
+                    <span class="legend-item"><i class="dot dot-default"></i> Online / Standby</span>
+                    <span class="legend-item"><i class="dot dot-active"></i> Evaluating</span>
+                    <span class="legend-item"><i class="dot dot-fail"></i> Failed (Cascade)</span>
+                    <span class="legend-item"><i class="dot dot-survive"></i> Survived (Backup)</span>
+                </div>
+                <div id="network-canvas"></div>
+            </div>
+            <div id="console-log">
+                <div class="log-line system-msg">SYSTEM: Awaiting simulation parameters...</div>
+            </div>
+        </main>
+    </div>
+    <script src="/static/app.js"></script>
+</body>
+</html>
