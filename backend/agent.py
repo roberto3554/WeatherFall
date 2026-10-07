@@ -157,29 +157,33 @@ async def evaluate_node_failure(
     magnitude: str = "Category 5",
     route_distance: float = 0.0,
     route_path_nodes: int = 0,
-    available_nodes: list[str] | None = None,
+    candidate_nodes: list[dict[str, Any]] | None = None,
+    available_nodes: list[Any] | None = None,
 ) -> dict[str, Any]:
     """
-    Evaluates whether a real-world child infrastructure node survives or cascade-fails
-    using the Groq LLM API, analyzing the OpenStreetMap physical street-routing distance
-    and intersection count, and orchestrates emergency self-healing rerouting if it fails.
+    Evaluates a child infrastructure node during a disaster cascade and performs
+    multi-objective optimization (Physics latency, Cost, and Viability) across the
+    top viable candidate nodes to orchestrate self-healing rerouting.
 
     Args:
         node_name: Real-world name of the child infrastructure node being evaluated.
         node_type: Infrastructure sector/category of the child node.
         parent_name: Name of the upstream parent node that failed.
         disaster_type: Type of climate disaster driving the cascade.
-        magnitude: Physical intensity/scale metric of the disaster (e.g., 'Category 5', 'Water level +2.5m').
-        route_distance: Physical street network routing distance in meters.
+        magnitude: Physical intensity/scale metric of the disaster.
+        route_distance: Physical street network routing distance in meters from parent.
         route_path_nodes: Number of street intersections crossed along the physical route.
-        available_nodes: Optional list of currently alive node names in the city graph for rerouting.
+        candidate_nodes: Up to 3 viable alive candidate nodes with their types and OSM street distances.
+        available_nodes: Optional legacy fallback list of available nodes.
 
     Returns:
         A dict with keys:
         - "status" (bool, False = failed, True = survived)
-        - "reasoning" (str, max 25 words detailing the specific physical or systemic cause)
-        - "recovery_command" (Optional[str], terminal command to reroute supply if status is False, else None)
-        - "new_edge" (Optional[dict[str, str]], {"source": ..., "target": node_name} if status is False, else None)
+        - "reasoning" (str, explanation balancing cost, latency, and physics)
+        - "recovery_command" (Optional[str])
+        - "estimated_cost" (Optional[int])
+        - "recovery_time_ms" (Optional[int])
+        - "new_edge" (Optional[dict[str, Any]])
     """
     groq_api_key = os.getenv("GROQ_API_KEY")
     if not groq_api_key:
@@ -188,25 +192,21 @@ async def evaluate_node_failure(
             "Please define GROQ_API_KEY in your .env file or environment."
         )
 
-    candidate_nodes = (available_nodes or [])[:8]
-    available_str = (
-        f" Available alive city nodes: {json.dumps(candidate_nodes)}."
-        if candidate_nodes
-        else ""
-    )
+    effective_candidates = candidate_nodes if candidate_nodes is not None else (available_nodes or [])[:3]
+    candidate_nodes_list = json.dumps(effective_candidates)
 
     system_prompt = (
-        f"You are an autonomous critical infrastructure AI. "
-        f"A {disaster_type} (Magnitude: {magnitude}) has impacted the city. "
-        f'The {node_type} node "{node_name}" depends on "{parent_name}". '
-        f"This dependency relies on a physical surface route spanning {route_distance} meters "
-        f"across {route_path_nodes} intersections. "
-        f"Evaluate if this specific physical connection is severed by the disaster or if the node survives. "
-        f"If it fails, you MUST generate a recovery terminal command to reroute its supply from another alive node in the city. "
-        f'Return ONLY valid JSON: {{"status": boolean, '
-        f'"reasoning": "Explain why the physical route or node failed in max 25 words based on distance and disaster physics", '
-        f'"recovery_command": "ln -s /city/grid/... /city/grid/...", '
-        f'"new_edge": {{"source": "alive_node_id", "target": "{node_name}"}}}}.'
+        f'You are an autonomous emergency infrastructure AI. Node "{node_name}" has failed due to a '
+        f"{disaster_type} (Magnitude: {magnitude}). You must attempt to reroute supply using ONE of the "
+        f"following available candidate nodes: {candidate_nodes_list}.\n\n"
+        f"Your decision must balance three constraints:\n\n"
+        f"Physics: Electricity and data have propagation delays over distance.\n\n"
+        f"Cost: Emergency bridging costs scale with distance and infrastructure type.\n\n"
+        f"Viability: Will the disaster's trajectory destroy this new route too?\n\n"
+        f'Return ONLY valid JSON: {{"status": false, "reasoning": "Brief explanation of why you chose this '
+        f'specific candidate balancing cost and latency.", "recovery_command": "ln -s /... /...", '
+        f'"new_edge": {{"source": "chosen_candidate_id", "target": "{node_name}", '
+        f'"estimated_cost": 15000, "recovery_time_ms": 120}}}}.'
     )
 
     headers = {
@@ -222,10 +222,10 @@ async def evaluate_node_failure(
                 "role": "user",
                 "content": (
                     f"Disaster: {disaster_type} (Magnitude: {magnitude}). "
-                    f'Failed parent: "{parent_name}". '
-                    f'Child node: "{node_name}" (type: {node_type}). '
-                    f"Physical surface route: {route_distance} meters across {route_path_nodes} intersections."
-                    f"{available_str}"
+                    f'Failed upstream parent: "{parent_name}". '
+                    f'Target node: "{node_name}" (type: {node_type}). '
+                    f"Original route from parent: {route_distance} meters across {route_path_nodes} intersections. "
+                    f"Viable candidate nodes for rerouting: {candidate_nodes_list}"
                 ),
             },
         ],
@@ -260,32 +260,76 @@ async def evaluate_node_failure(
             if status is True:
                 recovery_command = None
                 new_edge = None
+                estimated_cost = None
+                recovery_time_ms = None
             else:
                 raw_cmd = parsed.get("recovery_command")
                 recovery_command = str(raw_cmd) if raw_cmd else None
 
                 raw_edge = parsed.get("new_edge")
                 if isinstance(raw_edge, dict) and raw_edge.get("source"):
+                    try:
+                        est_cost = int(float(raw_edge.get("estimated_cost", parsed.get("estimated_cost", 15000))))
+                    except (TypeError, ValueError):
+                        est_cost = 15000
+
+                    try:
+                        rec_time = int(float(raw_edge.get("recovery_time_ms", parsed.get("recovery_time_ms", 120))))
+                    except (TypeError, ValueError):
+                        rec_time = 120
+
                     new_edge = {
                         "source": str(raw_edge["source"]),
                         "target": str(raw_edge.get("target") or node_name),
+                        "estimated_cost": est_cost,
+                        "recovery_time_ms": rec_time,
                     }
+                    estimated_cost = est_cost
+                    recovery_time_ms = rec_time
                 else:
                     new_edge = None
+                    estimated_cost = None
+                    recovery_time_ms = None
 
             return {
                 "status": status,
                 "reasoning": reasoning,
                 "recovery_command": recovery_command,
+                "estimated_cost": estimated_cost,
+                "recovery_time_ms": recovery_time_ms,
                 "new_edge": new_edge,
             }
 
     except Exception as exc:
         print(f"[WARNING] Groq LLM evaluation failed for node '{node_name}': {exc}")
+        fallback_source = None
+        if effective_candidates and isinstance(effective_candidates[0], dict):
+            fallback_source = effective_candidates[0].get("id") or effective_candidates[0].get("name")
+        elif effective_candidates and isinstance(effective_candidates[0], str):
+            fallback_source = effective_candidates[0]
+
+        if fallback_source:
+            return {
+                "status": False,
+                "reasoning": f"Fallback: Spatial evaluation timed out; rerouted to nearest candidate {fallback_source}.",
+                "recovery_command": f"ln -s /city/grid/{fallback_source} /city/grid/{node_name}",
+                "estimated_cost": 15000,
+                "recovery_time_ms": 120,
+                "new_edge": {
+                    "source": str(fallback_source),
+                    "target": node_name,
+                    "estimated_cost": 15000,
+                    "recovery_time_ms": 120,
+                },
+            }
+
         return {
             "status": True,
             "reasoning": "Fallback: Spatial evaluation timed out.",
             "recovery_command": None,
+            "estimated_cost": 0,
+            "recovery_time_ms": 0,
             "new_edge": None,
         }
+
 

@@ -404,6 +404,113 @@ async def delete_node(
 
 # ─── Simulation ──────────────────────────────────────────────────────────
 
+def _estimate_osm_street_distance_m(
+    graph: nx.DiGraph,
+    undirected_graph: nx.Graph,
+    source_node: str,
+    target_node: str,
+) -> float:
+    """
+    Calculates the physical OSM street network distance (in meters) between two
+    infrastructure nodes, using stored OSMnx routing_distance on edges/paths or
+    street-grid Haversine distance when nodes are not directly linked.
+    """
+    import math
+
+    direct_edge = (
+        graph.get_edge_data(source_node, target_node)
+        or graph.get_edge_data(target_node, source_node)
+    )
+    if direct_edge and direct_edge.get("routing_distance"):
+        return round(float(direct_edge["routing_distance"]), 1)
+
+    s_data = graph.nodes[source_node]
+    t_data = graph.nodes[target_node]
+    lon1, lat1 = float(s_data.get("x", 0.0)), float(s_data.get("y", 0.0))
+    lon2, lat2 = float(t_data.get("x", 0.0)), float(t_data.get("y", 0.0))
+
+    # Haversine + Miami rectilinear street-grid factor (~1.26x)
+    r_earth = 6371000.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2.0) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2.0) ** 2
+    euclidean_m = 2.0 * r_earth * math.atan2(math.sqrt(a), math.sqrt(max(0.0, 1.0 - a)))
+    street_grid_m = max(150.0, euclidean_m * 1.26)
+
+    try:
+        if nx.has_path(undirected_graph, source_node, target_node):
+            graph_path_m = float(
+                nx.shortest_path_length(
+                    undirected_graph,
+                    source=source_node,
+                    target=target_node,
+                    weight="routing_distance",
+                )
+            )
+            if graph_path_m > 0 and graph_path_m <= street_grid_m * 2.2:
+                return round(graph_path_m, 1)
+    except Exception:
+        pass
+
+    return round(street_grid_m, 1)
+
+
+def _get_viable_candidates(
+    graph: nx.DiGraph,
+    undirected_graph: nx.Graph,
+    child_name: str,
+    parent_name: str,
+    failed_nodes: set[str],
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    """
+    Task 2: Selects up to `limit` viable candidate nodes that are currently alive,
+    of a compatible infrastructure type to supply the failed child node, and physically
+    closest based on OSM street network distance.
+    """
+    parent_type = str(graph.nodes[parent_name].get("type", "energy")) if parent_name in graph else "energy"
+    child_type = str(graph.nodes[child_name].get("type", "unknown")) if child_name in graph else "unknown"
+
+    compatible_types = {parent_type, "energy"}
+    if child_type in {"water", "comms", "transport"}:
+        compatible_types.add(child_type)
+
+    scored_candidates: list[tuple[int, float, dict[str, Any]]] = []
+    for node_id, data in graph.nodes(data=True):
+        cand_name = str(node_id)
+        if cand_name in failed_nodes or cand_name == child_name:
+            continue
+
+        cand_type = str(data.get("type", "energy"))
+        dist_m = _estimate_osm_street_distance_m(graph, undirected_graph, cand_name, child_name)
+
+        # Priority 0: exact same type as failed parent or energy supplier
+        # Priority 1: other compatible type
+        # Priority 2: fallback alive facility if fewer than 3 compatible nodes exist
+        if cand_type == parent_type or cand_type == "energy":
+            type_priority = 0
+        elif cand_type in compatible_types:
+            type_priority = 1
+        else:
+            type_priority = 2
+
+        scored_candidates.append(
+            (
+                type_priority,
+                dist_m,
+                {
+                    "id": cand_name,
+                    "type": cand_type,
+                    "distance_m": dist_m,
+                },
+            )
+        )
+
+    scored_candidates.sort(key=lambda item: (item[0], item[1], item[2]["id"]))
+    return [item[2] for item in scored_candidates[:limit]]
+
+
 @app.post("/api/v1/simulate", response_model=list[NodeState])
 async def simulate_cascade(
     request: SimulationRequest,
@@ -440,6 +547,7 @@ async def simulate_cascade(
     if chosen_id not in graph:
         chosen_id = next(iter(graph.nodes))
 
+    undirected_graph = graph.to_undirected()
     bfs_queue: deque[str] = deque([chosen_id])
     visited: set[str] = {chosen_id}
     failed_nodes: set[str] = {chosen_id}
@@ -457,6 +565,8 @@ async def simulate_cascade(
             "status": False,
             "reasoning": llm_reasoning,
             "recovery_command": None,
+            "estimated_cost": None,
+            "recovery_time_ms": None,
             "new_edge": None,
         }
     ]
@@ -484,9 +594,13 @@ async def simulate_cascade(
             raw_path_nodes = edge_data.get("path_nodes")
             route_path_nodes = len(raw_path_nodes) if isinstance(raw_path_nodes, list) else 0
 
-            available_nodes = sorted(
-                [str(n) for n in graph.nodes if n not in failed_nodes and n != child_name],
-                key=lambda n: (0 if graph.nodes[n].get("type") == "energy" else 1, n),
+            candidate_nodes = _get_viable_candidates(
+                graph=graph,
+                undirected_graph=undirected_graph,
+                child_name=child_name,
+                parent_name=parent_name,
+                failed_nodes=failed_nodes,
+                limit=3,
             )
 
             try:
@@ -498,7 +612,7 @@ async def simulate_cascade(
                     magnitude=magnitude,
                     route_distance=route_distance,
                     route_path_nodes=route_path_nodes,
-                    available_nodes=available_nodes,
+                    candidate_nodes=candidate_nodes,
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -507,7 +621,9 @@ async def simulate_cascade(
             reasoning = str(evaluation["reasoning"])
             recovery_command: str | None = evaluation.get("recovery_command")
             raw_new_edge = evaluation.get("new_edge")
-            validated_new_edge: dict[str, str] | None = None
+            validated_new_edge: dict[str, Any] | None = None
+            step_cost: int | None = None
+            step_time_ms: int | None = None
 
             if child_status is False:
                 failed_nodes.add(child_name)
@@ -533,13 +649,38 @@ async def simulate_cascade(
                                 break
 
                 if (
+                    resolved_source is None
+                    or resolved_source not in graph
+                    or resolved_source in failed_nodes
+                    or resolved_source == target_node
+                ) and candidate_nodes:
+                    resolved_source = str(candidate_nodes[0]["id"])
+
+                if (
                     resolved_source is not None
                     and resolved_source in graph
                     and resolved_source not in failed_nodes
                     and resolved_source != target_node
                 ):
+                    try:
+                        est_cost = int(float(raw_new_edge.get("estimated_cost", evaluation.get("estimated_cost", 15000))))
+                    except (TypeError, ValueError):
+                        est_cost = 15000
+
+                    try:
+                        rec_time = int(float(raw_new_edge.get("recovery_time_ms", evaluation.get("recovery_time_ms", 120))))
+                    except (TypeError, ValueError):
+                        rec_time = 120
+
                     graph.add_edge(resolved_source, target_node)
-                    validated_new_edge = {"source": resolved_source, "target": target_node}
+                    validated_new_edge = {
+                        "source": resolved_source,
+                        "target": target_node,
+                        "estimated_cost": est_cost,
+                        "recovery_time_ms": rec_time,
+                    }
+                    step_cost = est_cost
+                    step_time_ms = rec_time
 
             execution_trace.append(
                 {
@@ -553,6 +694,8 @@ async def simulate_cascade(
                     "status": child_status,
                     "reasoning": reasoning,
                     "recovery_command": recovery_command if validated_new_edge or recovery_command else None,
+                    "estimated_cost": step_cost,
+                    "recovery_time_ms": step_time_ms,
                     "new_edge": validated_new_edge,
                 }
             )
