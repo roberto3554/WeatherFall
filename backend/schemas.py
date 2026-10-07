@@ -102,6 +102,23 @@ class SimulationRequest(BaseModel):
     )
 
 
+class NewEdge(BaseModel):
+    """Emergency self-healing edge proposed by the AI with cost and latency metrics."""
+
+    model_config = ConfigDict(extra="allow")
+
+    source: str = Field(..., description="ID/name of the alive candidate node supplying recovery.")
+    target: str = Field(..., description="ID/name of the failed node receiving emergency supply.")
+    estimated_cost: int = Field(
+        ...,
+        description="Estimated emergency deployment cost (e.g., USD or thousands of dollars).",
+    )
+    recovery_time_ms: int = Field(
+        ...,
+        description="Propagation delay or deployment latency in milliseconds.",
+    )
+
+
 class NodeState(BaseModel):
     """Evaluated state of a single infrastructure node in the self-healing simulation trace."""
 
@@ -118,6 +135,14 @@ class NodeState(BaseModel):
     node_type: str = Field(default="unknown")
     magnitude: Optional[str] = Field(default=None)
     status: bool = Field(default=False)
-    reasoning: str = Field(..., description="AI reasoning (max 25 words).")
+    reasoning: str = Field(..., description="AI reasoning balancing cost, latency, and physics.")
     recovery_command: Optional[str] = Field(default=None)
-    new_edge: Optional[dict[str, Any]] = Field(default=None)
+    estimated_cost: Optional[int] = Field(
+        default=None,
+        description="Estimated cost for emergency rerouting deployment when recovery is proposed.",
+    )
+    recovery_time_ms: Optional[int] = Field(
+        default=None,
+        description="Estimated recovery/propagation time in ms when recovery is proposed.",
+    )
+    new_edge: Optional[NewEdge] = Field(default=None)
