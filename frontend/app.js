@@ -225,6 +225,51 @@ function appendLog(text, type = 'system-msg') {
     consoleLog.scrollTop = consoleLog.scrollHeight;
 }
 
+// Tracks nodes saved by Self-Healing AI rerouting so the canvas renders a pulsing cyan glow
+const savedNodeIds = new Set();
+let pulseAnimFrame = null;
+
+function startSavedNodesPulse() {
+    if (pulseAnimFrame) return;
+    function tick() {
+        if (savedNodeIds.size === 0) {
+            pulseAnimFrame = null;
+            return;
+        }
+        if (network) {
+            network.redraw();
+        }
+        pulseAnimFrame = requestAnimationFrame(tick);
+    }
+    pulseAnimFrame = requestAnimationFrame(tick);
+}
+
+/**
+ * Task 2: Prints a recovery terminal command character by character with a strict
+ * typewriter effect in bright cyan (.recovery-cmd) to simulate live override execution.
+ */
+async function typewriterLog(commandText, charDelay = 22) {
+    const consoleLog = document.getElementById('console-log');
+    if (!consoleLog) return;
+
+    const el = document.createElement('div');
+    el.className = 'log-line recovery-cmd typing';
+    const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
+    const prefix = `[${timestamp}] [AI OVERRIDE] $ `;
+    el.textContent = prefix;
+    consoleLog.appendChild(el);
+    consoleLog.scrollTop = consoleLog.scrollHeight;
+
+    const fullCmd = String(commandText);
+    for (let c = 0; c < fullCmd.length; c++) {
+        el.textContent = prefix + fullCmd.slice(0, c + 1);
+        consoleLog.scrollTop = consoleLog.scrollHeight;
+        await new Promise(resolve => setTimeout(resolve, charDelay));
+    }
+
+    el.classList.remove('typing');
+}
+
 /**
  * Updates the sidebar telemetry counters.
  */
@@ -258,6 +303,8 @@ function updateTelemetry({ state, evaluated, total, failed, survived }) {
 function resetGraphState() {
     if (!nodesDataSet || !edgesDataSet) return;
 
+    savedNodeIds.clear();
+
     const nodeUpdates = topologyNodes.map(node => ({
         id: node.id,
         label: truncateLabel(node.name, 15),
@@ -268,9 +315,16 @@ function resetGraphState() {
     }));
     nodesDataSet.update(nodeUpdates);
 
+    const existingEdges = edgesDataSet.get();
+    const dynamicIds = existingEdges.filter(e => String(e.id).startsWith('heal_edge_')).map(e => e.id);
+    if (dynamicIds.length > 0) {
+        edgesDataSet.remove(dynamicIds);
+    }
+
     const edgeUpdates = edgesDataSet.get().map(edge => ({
         id: edge.id,
         width: 1.4,
+        dashes: false,
         color: { color: 'rgba(88, 166, 255, 0.25)', highlight: '#00ff00', hover: '#58a6ff' }
     }));
     edgesDataSet.update(edgeUpdates);
@@ -440,6 +494,31 @@ async function fetchAndRenderTopology() {
             }
         });
 
+        // Task 3: Subtle pulsing cyan glow ring around nodes 'saved' by the Self-Healing AI
+        network.on('afterDrawing', function (ctx) {
+            if (savedNodeIds.size === 0) return;
+            const t = performance.now() / 1000;
+            const pulse = 0.5 + 0.5 * Math.sin(t * 4.2);
+            const positions = network.getPositions(Array.from(savedNodeIds));
+
+            ctx.save();
+            savedNodeIds.forEach(nodeId => {
+                const pos = positions[nodeId];
+                if (!pos) return;
+                const radius = 22 + pulse * 10;
+                const alpha = 0.25 + (1 - pulse) * 0.45;
+
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(0, 255, 255, ${alpha.toFixed(2)})`;
+                ctx.lineWidth = 2.4;
+                ctx.shadowColor = '#00FFFF';
+                ctx.shadowBlur = 14;
+                ctx.stroke();
+            });
+            ctx.restore();
+        });
+
         // Update 'Epicenter Node' when user clicks a node on the canvas
         network.on('click', (params) => {
             if (params.nodes && params.nodes.length > 0 && !isSimulating) {
@@ -586,7 +665,7 @@ async function runSimulation() {
 }
 
 /**
- * Sequentially animates each evaluated node and edge in the BFS execution trace.
+ * Sequentially animates each evaluated node, typewriter recovery command, and dynamic self-healing edge.
  */
 async function animateExecutionTrace(trace) {
     let failedCount = 0;
@@ -676,7 +755,52 @@ async function animateExecutionTrace(trace) {
             logClass
         );
 
-        await new Promise(resolve => setTimeout(resolve, 600));
+        // Task 2: Terminal Execution Effect with character-by-character typewriter animation
+        if (step.recovery_command) {
+            await typewriterLog(step.recovery_command, 20);
+        }
+
+        // Task 1: Dynamic Edge Injection & Task 3: Visual Polish for 'saved' nodes
+        if (step.new_edge && step.new_edge.source && step.new_edge.target && edgesDataSet) {
+            const healEdgeId = `heal_edge_${stepNum}_${step.new_edge.source}_${step.new_edge.target}`;
+            if (!edgesDataSet.get(healEdgeId)) {
+                edgesDataSet.add({
+                    id: healEdgeId,
+                    from: step.new_edge.source,
+                    to: step.new_edge.target,
+                    color: { color: '#00FFFF', highlight: '#00FFFF' },
+                    dashes: true,
+                    arrows: 'to',
+                    width: 2.8
+                });
+            }
+
+            // Mark node as saved by AI rerouting with pulsing cyan glow
+            savedNodeIds.add(nodeId);
+            startSavedNodesPulse();
+
+            if (nodesDataSet && nodesDataSet.get(nodeId)) {
+                nodesDataSet.update({
+                    id: nodeId,
+                    label: `${shortName}\n[SAVED]`,
+                    size: 22,
+                    image: getNodeSvgIcon(nodeType, '#00FFFF')
+                });
+            }
+
+            appendLog(
+                `Node saved by rerouting (${step.new_edge.source} ➔ ${step.new_edge.target}).`,
+                'trace-saved node-saved'
+            );
+
+            // Pause briefly to let the user see the new lifeline connection form on the map
+            await new Promise(resolve => setTimeout(resolve, 900));
+        } else if (step.recovery_command) {
+            appendLog('Node saved by rerouting.', 'trace-saved node-saved');
+            await new Promise(resolve => setTimeout(resolve, 650));
+        } else {
+            await new Promise(resolve => setTimeout(resolve, 550));
+        }
     }
 
     updateTelemetry({
@@ -688,7 +812,7 @@ async function animateExecutionTrace(trace) {
     });
 
     appendLog(
-        `[COMPLETE] Simulation finished — ${failedCount} failed, ${survivedCount} survived.`,
+        `[COMPLETE] Simulation finished — ${failedCount} failed (${savedNodeIds.size} rerouted by AI), ${survivedCount} survived intact.`,
         'system-msg'
     );
 
