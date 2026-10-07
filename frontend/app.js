@@ -1,11 +1,11 @@
-// frontend/app.js
+// frontend/app.js — WeatherFall SaaS Command Center Frontend
 
 let network = null;
 let nodesDataSet = null;
 let edgesDataSet = null;
 let topologyNodes = [];
 let isSimulating = false;
-let activeDropdownIndex = -1;
+let feedEventCount = 0;
 
 // ── AUTH ──
 const AUTH_TOKEN_KEY = 'weatherfall_token';
@@ -25,12 +25,12 @@ function updateAuthBar() {
     if (!userEl || !adminLink || !loginLink || !logoutBtn) return;
 
     if (token) {
-        userEl.textContent = `${username}${isAdmin ? '@admin' : ''}`;
+        userEl.textContent = `${username}${isAdmin ? ' (Admin)' : ''}`;
         adminLink.classList.toggle('hidden', !isAdmin);
         loginLink.classList.add('hidden');
         logoutBtn.classList.remove('hidden');
     } else {
-        userEl.textContent = 'guest';
+        userEl.textContent = 'Guest Operator';
         adminLink.classList.add('hidden');
         loginLink.classList.remove('hidden');
         logoutBtn.classList.add('hidden');
@@ -42,7 +42,7 @@ function handleLogout() {
     localStorage.removeItem(AUTH_USER_KEY);
     localStorage.removeItem(AUTH_ADMIN_KEY);
     updateAuthBar();
-    appendLog('[AUTH] Session terminated.', 'system-msg');
+    appendSystemCard('Operator Session Ended', 'You have signed out of the operator session.');
 }
 // ── /AUTH ──
 
@@ -73,63 +73,72 @@ function toSvgDataUri(svgString) {
     return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgString.trim());
 }
 
-function createTerminalSvg(nodeType = 'energy', strokeOverride = null) {
+/**
+ * Task 3: Refined Map Node Aesthetics — softer, UI-friendly SaaS colors & crisp badge icons.
+ */
+function getSectorAccentColor(nodeType = 'energy') {
     const type = String(nodeType).toLowerCase();
+    if (type.includes('water') || type.includes('sanitation')) return '#06b6d4'; // Cyan
+    if (type.includes('transport')) return '#f97316'; // Orange
+    if (type.includes('health')) return '#10b981'; // Emerald
+    if (type.includes('comms') || type.includes('telecom')) return '#8b5cf6'; // Violet
+    return '#f59e0b'; // Amber (Energy)
+}
+
+function createModernNodeSvg(nodeType = 'energy', strokeOverride = null) {
+    const type = String(nodeType).toLowerCase();
+    const accent = strokeOverride || getSectorAccentColor(type);
+
+    const baseBadge = (innerPath) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40">
+        <circle cx="20" cy="20" r="18" fill="${accent}" fill-opacity="0.16"/>
+        <circle cx="20" cy="20" r="15" fill="#0f172a" fill-opacity="0.92" stroke="${accent}" stroke-width="2.2"/>
+        ${innerPath}
+    </svg>`;
 
     if (type.includes('water') || type.includes('sanitation')) {
-        const stroke = strokeOverride || '#00FFFF';
-        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="36" height="36">
-            <circle cx="18" cy="18" r="16" fill="#060c14" fill-opacity="0.78" stroke="${stroke}" stroke-width="1.8"/>
-            <path d="M18 7 C18 7 10 17 10 22 A8 8 0 0 0 26 22 C26 17 18 7 18 7 Z" fill="none" stroke="${stroke}" stroke-width="2.2" stroke-linejoin="round"/>
-            <path d="M14 23 A4 4 0 0 0 18 26" fill="none" stroke="${stroke}" stroke-width="1.6" stroke-linecap="round"/>
-        </svg>`;
+        return baseBadge(`
+            <path d="M20 10 C20 10 13 18.5 13 23 A7 7 0 0 0 27 23 C27 18.5 20 10 20 10 Z" fill="none" stroke="${accent}" stroke-width="2" stroke-linejoin="round"/>
+            <path d="M16.5 23.5 A3.5 3.5 0 0 0 20 26.5" fill="none" stroke="${accent}" stroke-width="1.6" stroke-linecap="round"/>
+        `);
     }
 
     if (type.includes('transport')) {
-        const stroke = strokeOverride || '#FFA500';
-        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="36" height="36">
-            <circle cx="18" cy="18" r="16" fill="#060c14" fill-opacity="0.78" stroke="${stroke}" stroke-width="1.8"/>
-            <path d="M7 24 L29 24 M11 24 L11 14 M25 24 L25 14 M7 19 Q18 10 29 19" fill="none" stroke="${stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            <line x1="18" y1="14" x2="18" y2="24" stroke="${stroke}" stroke-width="1.6" stroke-dasharray="2,2"/>
-        </svg>`;
+        return baseBadge(`
+            <path d="M10 25 L30 25 M13.5 25 L13.5 16 M26.5 25 L26.5 16 M10 20.5 Q20 12.5 30 20.5" fill="none" stroke="${accent}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            <line x1="20" y1="16" x2="20" y2="25" stroke="${accent}" stroke-width="1.5" stroke-dasharray="2,2"/>
+        `);
     }
 
     if (type.includes('health')) {
-        const stroke = strokeOverride || '#00FF00';
-        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="36" height="36">
-            <circle cx="18" cy="18" r="16" fill="#060c14" fill-opacity="0.78" stroke="${stroke}" stroke-width="1.8"/>
-            <path d="M15 9 H21 V15 H27 V21 H21 V27 H15 V21 H9 V15 H15 Z" fill="none" stroke="${stroke}" stroke-width="2.2" stroke-linejoin="round"/>
-        </svg>`;
+        return baseBadge(`
+            <path d="M17.5 12 H22.5 V17.5 H28 V22.5 H22.5 V28 H17.5 V22.5 H12 V17.5 H17.5 Z" fill="none" stroke="${accent}" stroke-width="2" stroke-linejoin="round"/>
+        `);
     }
 
     if (type.includes('comms') || type.includes('telecom')) {
-        const stroke = strokeOverride || '#00FF00';
-        return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="36" height="36">
-            <circle cx="18" cy="18" r="16" fill="#060c14" fill-opacity="0.78" stroke="${stroke}" stroke-width="1.8"/>
-            <path d="M18 14 L12 28 M18 14 L24 28 M14 23 H22" fill="none" stroke="${stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-            <circle cx="18" cy="12" r="2" fill="${stroke}"/>
-            <path d="M12 9 A8 8 0 0 1 24 9 M9 6.5 A12 12 0 0 1 27 6.5" fill="none" stroke="${stroke}" stroke-width="1.6" stroke-linecap="round"/>
-        </svg>`;
+        return baseBadge(`
+            <path d="M20 16.5 L14.5 28.5 M20 16.5 L25.5 28.5 M16.2 24.5 H23.8" fill="none" stroke="${accent}" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="20" cy="14.5" r="2" fill="${accent}"/>
+            <path d="M14.5 12 A7.5 7.5 0 0 1 25.5 12" fill="none" stroke="${accent}" stroke-width="1.6" stroke-linecap="round"/>
+        `);
     }
 
-    const stroke = strokeOverride || '#00FF00';
-    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="36" height="36">
-        <circle cx="18" cy="18" r="16" fill="#060c14" fill-opacity="0.78" stroke="${stroke}" stroke-width="1.8"/>
-        <polygon points="20,7 10,20 17,20 15,29 26,16 19,16" fill="none" stroke="${stroke}" stroke-width="2.2" stroke-linejoin="round"/>
-    </svg>`;
+    return baseBadge(`
+        <polygon points="21.5,10 13,21 19,21 17.5,30 27,18.5 21,18.5" fill="none" stroke="${accent}" stroke-width="2" stroke-linejoin="round"/>
+    `);
 }
 
 const SVG_ICONS = {
-    energy: toSvgDataUri(createTerminalSvg('energy')),
-    health: toSvgDataUri(createTerminalSvg('health')),
-    comms: toSvgDataUri(createTerminalSvg('comms')),
-    water: toSvgDataUri(createTerminalSvg('water')),
-    transport: toSvgDataUri(createTerminalSvg('transport'))
+    energy: toSvgDataUri(createModernNodeSvg('energy')),
+    health: toSvgDataUri(createModernNodeSvg('health')),
+    comms: toSvgDataUri(createModernNodeSvg('comms')),
+    water: toSvgDataUri(createModernNodeSvg('water')),
+    transport: toSvgDataUri(createModernNodeSvg('transport'))
 };
 
 function getNodeSvgIcon(nodeType = 'energy', strokeOverride = null) {
     if (strokeOverride) {
-        return toSvgDataUri(createTerminalSvg(nodeType, strokeOverride));
+        return toSvgDataUri(createModernNodeSvg(nodeType, strokeOverride));
     }
     const type = String(nodeType).toLowerCase();
     if (type.includes('water')) return SVG_ICONS.water;
@@ -139,9 +148,15 @@ function getNodeSvgIcon(nodeType = 'energy', strokeOverride = null) {
     return SVG_ICONS.energy;
 }
 
-function truncateLabel(name = '', maxLen = 15) {
+function buildPopoverTooltip(node, statusText = 'Operational') {
+    const sector = String(node.type || 'energy').toUpperCase();
+    const coords = `${Number(node.rawY || 0).toFixed(4)}° N, ${Math.abs(Number(node.rawX || 0)).toFixed(4)}° W`;
+    return `${node.name}\nSector: ${sector} • Status: ${statusText}\nCoordinates: ${coords}`;
+}
+
+function truncateLabel(name = '', maxLen = 16) {
     const str = String(name).trim();
-    return str.length > maxLen ? str.slice(0, maxLen) + '...' : str;
+    return str.length > maxLen ? str.slice(0, maxLen) + '…' : str;
 }
 
 function projectNodeCoordinates(rawX, rawY) {
@@ -220,16 +235,112 @@ function calculateMapBounds(nodes) {
     };
 }
 
-function appendLog(text, type = 'system-msg') {
+// =========================================================
+// TASK 2: INCIDENT TIMELINE / LIVE FEED NOTIFICATION CARDS
+// =========================================================
+
+const FEED_SVGS = {
+    system: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`,
+    impact: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>`,
+    fail: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`,
+    survive: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`,
+    shield: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>`
+};
+
+function updateFeedCounter() {
+    const badge = document.getElementById('feed-count-badge');
+    if (badge) {
+        badge.textContent = feedEventCount > 0 ? `${feedEventCount} events` : 'Standby';
+    }
+}
+
+function appendFeedCard({
+    variant = 'system',
+    iconSvg = FEED_SVGS.system,
+    iconClass = 'system-icon',
+    title = '',
+    pillText = '',
+    pillClass = '',
+    description = '',
+    technicalCommand = null,
+    pdfSummary = ''
+}) {
     const consoleLog = document.getElementById('console-log');
     if (!consoleLog) return;
 
-    const el = document.createElement('div');
-    el.className = `log-line ${type}`;
     const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
-    el.textContent = `[${timestamp}] ${text}`;
-    consoleLog.appendChild(el);
+    const card = document.createElement('div');
+    card.className = `feed-card feed-card-${variant} log-line`;
+    card.dataset.pdfSummary = pdfSummary || `[${timestamp}] ${title}${pillText ? ` [${pillText}]` : ''}: ${description}`;
+
+    const iconDiv = document.createElement('div');
+    iconDiv.className = `feed-card-icon ${iconClass}`;
+    iconDiv.innerHTML = iconSvg;
+
+    const bodyDiv = document.createElement('div');
+    bodyDiv.className = 'feed-card-body';
+
+    const headerDiv = document.createElement('div');
+    headerDiv.className = 'feed-card-header';
+
+    const titleGroup = document.createElement('div');
+    titleGroup.className = 'feed-card-title-group';
+
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'feed-card-title';
+    titleSpan.textContent = title;
+    titleGroup.appendChild(titleSpan);
+
+    if (pillText) {
+        const pillSpan = document.createElement('span');
+        pillSpan.className = `feed-status-pill ${pillClass}`;
+        pillSpan.textContent = pillText;
+        titleGroup.appendChild(pillSpan);
+    }
+
+    const timeSpan = document.createElement('span');
+    timeSpan.className = 'feed-card-time';
+    timeSpan.textContent = timestamp;
+
+    headerDiv.appendChild(titleGroup);
+    headerDiv.appendChild(timeSpan);
+    bodyDiv.appendChild(headerDiv);
+
+    const descP = document.createElement('p');
+    descP.className = 'feed-card-desc';
+    descP.textContent = description;
+    bodyDiv.appendChild(descP);
+
+    if (technicalCommand) {
+        const detailsEl = document.createElement('details');
+        detailsEl.className = 'tech-details';
+        const summaryEl = document.createElement('summary');
+        summaryEl.textContent = 'Technical Details';
+        const codeEl = document.createElement('code');
+        codeEl.className = 'tech-cmd';
+        codeEl.textContent = `$ ${technicalCommand}`;
+        detailsEl.appendChild(summaryEl);
+        detailsEl.appendChild(codeEl);
+        bodyDiv.appendChild(detailsEl);
+    }
+
+    card.appendChild(iconDiv);
+    card.appendChild(bodyDiv);
+    consoleLog.appendChild(card);
     consoleLog.scrollTop = consoleLog.scrollHeight;
+
+    feedEventCount++;
+    updateFeedCounter();
+}
+
+function appendSystemCard(title, description) {
+    appendFeedCard({
+        variant: 'system',
+        iconSvg: FEED_SVGS.system,
+        iconClass: 'system-icon',
+        title,
+        description
+    });
 }
 
 const savedNodeIds = new Set();
@@ -249,28 +360,6 @@ function startCanvasPulseLoop() {
         pulseAnimFrame = requestAnimationFrame(tick);
     }
     pulseAnimFrame = requestAnimationFrame(tick);
-}
-
-async function typewriterLog(commandText, charDelay = 22) {
-    const consoleLog = document.getElementById('console-log');
-    if (!consoleLog) return;
-
-    const el = document.createElement('div');
-    el.className = 'log-line recovery-cmd typing';
-    const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
-    const prefix = `[${timestamp}] [AI OVERRIDE] $ `;
-    el.textContent = prefix;
-    consoleLog.appendChild(el);
-    consoleLog.scrollTop = consoleLog.scrollHeight;
-
-    const fullCmd = String(commandText);
-    for (let c = 0; c < fullCmd.length; c++) {
-        el.textContent = prefix + fullCmd.slice(0, c + 1);
-        consoleLog.scrollTop = consoleLog.scrollHeight;
-        await new Promise(resolve => setTimeout(resolve, charDelay));
-    }
-
-    el.classList.remove('typing');
 }
 
 function updateTelemetry({ state, evaluated, total, failed, survived }) {
@@ -310,9 +399,9 @@ function resetGraphState() {
 
     const nodeUpdates = topologyNodes.map(node => ({
         id: node.id,
-        label: truncateLabel(node.name, 15),
-        title: node.name,
-        size: 18,
+        label: truncateLabel(node.name, 16),
+        title: buildPopoverTooltip(node, 'Operational'),
+        size: 19,
         shape: 'image',
         image: getNodeSvgIcon(node.type)
     }));
@@ -326,9 +415,9 @@ function resetGraphState() {
 
     const edgeUpdates = edgesDataSet.get().map(edge => ({
         id: edge.id,
-        width: 1.4,
+        width: 1.5,
         dashes: false,
-        color: { color: 'rgba(88, 166, 255, 0.25)', highlight: '#00ff00', hover: '#58a6ff' }
+        color: { color: 'rgba(148, 163, 184, 0.3)', highlight: '#38bdf8', hover: '#60a5fa' }
     }));
     edgesDataSet.update(edgeUpdates);
 
@@ -357,7 +446,6 @@ async function fetchAndRenderTopology() {
     const nodeCountBadge = document.getElementById('node-count-badge');
 
     try {
-        appendLog('Fetching Miami infrastructure topology from /api/v1/topology...', 'system-msg');
         const response = await fetch('/api/v1/topology');
         if (!response.ok) {
             throw new Error(`Failed to fetch topology (HTTP ${response.status})`);
@@ -396,8 +484,8 @@ async function fetchAndRenderTopology() {
         nodesDataSet = new vis.DataSet(
             topologyNodes.map(node => ({
                 id: node.id,
-                label: truncateLabel(node.name, 15),
-                title: `${node.name} (${node.type}) [${node.rawX.toFixed(3)}, ${node.rawY.toFixed(3)}]`,
+                label: truncateLabel(node.name, 16),
+                title: buildPopoverTooltip(node, 'Operational'),
                 group: node.type,
                 shape: 'image',
                 image: getNodeSvgIcon(node.type),
@@ -417,19 +505,30 @@ async function fetchAndRenderTopology() {
         const options = {
             nodes: {
                 shape: 'image',
-                size: 18,
-                font: {
-                    color: '#ffffff',
-                    strokeWidth: 4,
-                    strokeColor: '#0d1117',
+                size: 19,
+                shadow: {
+                    enabled: true,
+                    color: 'rgba(2, 6, 23, 0.65)',
                     size: 12,
-                    face: 'Courier New'
+                    x: 0,
+                    y: 3
+                },
+                font: {
+                    color: '#f8fafc',
+                    strokeWidth: 3.5,
+                    strokeColor: '#0f172a',
+                    size: 11,
+                    face: 'Inter, -apple-system, BlinkMacSystemFont, sans-serif'
                 }
             },
             edges: {
-                width: 1.4,
-                color: { color: 'rgba(88, 166, 255, 0.25)', highlight: '#00ff00', hover: '#58a6ff' },
-                arrows: { to: { enabled: true, scaleFactor: 0.55 } },
+                width: 1.5,
+                color: {
+                    color: 'rgba(148, 163, 184, 0.3)',
+                    highlight: '#38bdf8',
+                    hover: '#60a5fa'
+                },
+                arrows: { to: { enabled: true, scaleFactor: 0.5 } },
                 smooth: { type: 'continuous' }
             },
             physics: {
@@ -440,7 +539,7 @@ async function fetchAndRenderTopology() {
                 dragView: true,
                 zoomView: true,
                 hover: true,
-                tooltipDelay: 200
+                tooltipDelay: 120
             }
         };
 
@@ -456,7 +555,7 @@ async function fetchAndRenderTopology() {
                 const drawY = mapBounds.centerY - mapBounds.height / 2;
                 ctx.save();
                 ctx.drawImage(mapImage, drawX, drawY, mapBounds.width, mapBounds.height);
-                ctx.strokeStyle = 'rgba(88, 166, 255, 0.25)';
+                ctx.strokeStyle = 'rgba(148, 163, 184, 0.22)';
                 ctx.lineWidth = 1.5;
                 ctx.strokeRect(drawX, drawY, mapBounds.width, mapBounds.height);
                 ctx.restore();
@@ -466,7 +565,7 @@ async function fetchAndRenderTopology() {
         network.on('afterDrawing', function (ctx) {
             if (savedNodeIds.size === 0 && !impactNodeId) return;
             const t = performance.now() / 1000;
-            const pulse = 0.5 + 0.5 * Math.sin(t * 4.5);
+            const pulse = 0.5 + 0.5 * Math.sin(t * 4.0);
 
             ctx.save();
 
@@ -474,14 +573,14 @@ async function fetchAndRenderTopology() {
                 const impactPositions = network.getPositions([impactNodeId]);
                 const impactPos = impactPositions[impactNodeId];
                 if (impactPos) {
-                    const shockRadius = 24 + ((t * 28) % 26);
-                    const shockAlpha = Math.max(0.15, 0.85 - ((shockRadius - 24) / 26) * 0.7);
+                    const shockRadius = 24 + ((t * 26) % 26);
+                    const shockAlpha = Math.max(0.12, 0.78 - ((shockRadius - 24) / 26) * 0.65);
                     ctx.beginPath();
                     ctx.arc(impactPos.x, impactPos.y, shockRadius, 0, Math.PI * 2);
-                    ctx.strokeStyle = `rgba(255, 234, 0, ${shockAlpha.toFixed(2)})`;
-                    ctx.lineWidth = 2.8;
-                    ctx.shadowColor = '#f85149';
-                    ctx.shadowBlur = 18;
+                    ctx.strokeStyle = `rgba(245, 158, 11, ${shockAlpha.toFixed(2)})`;
+                    ctx.lineWidth = 2.5;
+                    ctx.shadowColor = '#ef4444';
+                    ctx.shadowBlur = 16;
                     ctx.stroke();
                 }
             }
@@ -491,14 +590,14 @@ async function fetchAndRenderTopology() {
                 savedNodeIds.forEach(nodeId => {
                     const pos = positions[nodeId];
                     if (!pos) return;
-                    const radius = 22 + pulse * 10;
+                    const radius = 22 + pulse * 9;
                     const alpha = 0.25 + (1 - pulse) * 0.45;
 
                     ctx.beginPath();
                     ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
-                    ctx.strokeStyle = `rgba(0, 255, 255, ${alpha.toFixed(2)})`;
-                    ctx.lineWidth = 2.4;
-                    ctx.shadowColor = '#00FFFF';
+                    ctx.strokeStyle = `rgba(56, 189, 248, ${alpha.toFixed(2)})`;
+                    ctx.lineWidth = 2.2;
+                    ctx.shadowColor = '#38bdf8';
                     ctx.shadowBlur = 14;
                     ctx.stroke();
                 });
@@ -517,12 +616,20 @@ async function fetchAndRenderTopology() {
             survived: 0
         });
 
-        appendLog(
-            `Rendered Miami map topology: ${topologyNodes.length} SVG nodes and ${rawEdges.length} directed edges.`,
-            'system-msg'
+        appendSystemCard(
+            'Miami Infrastructure Grid Loaded',
+            `Connected ${topologyNodes.length} critical facilities across ${rawEdges.length} street-routed dependency links.`
         );
     } catch (error) {
-        appendLog(`[ERROR] Could not load topology: ${error.message}`, 'trace-fail');
+        appendFeedCard({
+            variant: 'fail',
+            iconSvg: FEED_SVGS.fail,
+            iconClass: 'fail-icon',
+            title: 'Topology Load Error',
+            pillText: 'Error',
+            pillClass: 'pill-fail',
+            description: `Could not load Miami topology: ${error.message}`
+        });
     }
 }
 
@@ -547,7 +654,7 @@ async function runSimulation() {
 
     if (window.innerWidth <= 768 && sidebar && !sidebar.classList.contains('collapsed')) {
         sidebar.classList.add('collapsed');
-        if (sidebarToggleBtn) sidebarToggleBtn.textContent = '[ CONTROLS ▼ ]';
+        if (sidebarToggleBtn) sidebarToggleBtn.textContent = 'Controls';
     }
 
     isSimulating = true;
@@ -556,7 +663,11 @@ async function runSimulation() {
     if (loadingSpinner) loadingSpinner.classList.remove('hidden');
 
     resetGraphState();
-    if (consoleLog) consoleLog.innerHTML = '';
+    if (consoleLog) {
+        consoleLog.innerHTML = '';
+        feedEventCount = 0;
+        updateFeedCounter();
+    }
 
     updateTelemetry({
         state: 'RUNNING',
@@ -566,9 +677,9 @@ async function runSimulation() {
         survived: 0
     });
 
-    appendLog(
-        `[INIT] Simulating ${disasterType} (${magnitude}) | Trajectory: "${trajectory}"...`,
-        'system-msg'
+    appendSystemCard(
+        `Simulation Initiated — ${disasterType}`,
+        `Evaluating "${trajectory}" at intensity ${magnitude} across the Miami street network.`
     );
 
     try {
@@ -590,16 +701,19 @@ async function runSimulation() {
         const executionTrace = await response.json();
         if (loadingSpinner) loadingSpinner.classList.add('hidden');
 
-        appendLog(
-            `[TRACE RECEIVED] Animating meteorological impact + ${Math.max(0, executionTrace.length - 1)} cascade evaluations...`,
-            'system-msg'
-        );
-
         await animateExecutionTrace(executionTrace);
     } catch (error) {
         if (loadingSpinner) loadingSpinner.classList.add('hidden');
         updateTelemetry({ state: 'ERROR' });
-        appendLog(`[ERROR] ${error.message}`, 'trace-fail');
+        appendFeedCard({
+            variant: 'fail',
+            iconSvg: FEED_SVGS.fail,
+            iconClass: 'fail-icon',
+            title: 'Simulation Interrupted',
+            pillText: 'Error',
+            pillClass: 'pill-fail',
+            description: error.message
+        });
     } finally {
         isSimulating = false;
         if (runBtn) runBtn.disabled = false;
@@ -607,7 +721,7 @@ async function runSimulation() {
     }
 }
 
-async function flashImpactNode(nodeId, nodeType, shortName) {
+async function flashImpactNode(nodeId, nodeType, shortName, matchingNode) {
     if (!nodesDataSet || !nodesDataSet.get(nodeId)) return;
 
     impactNodeId = nodeId;
@@ -618,22 +732,23 @@ async function flashImpactNode(nodeId, nodeType, shortName) {
         animation: { duration: 450, easingFunction: 'easeInOutQuad' }
     });
 
-    const flashColors = ['#ffea00', '#f85149', '#ffea00', '#f85149', '#ffea00', '#f85149'];
+    const flashColors = ['#f59e0b', '#ef4444', '#f59e0b', '#ef4444', '#f59e0b', '#ef4444'];
     for (let f = 0; f < flashColors.length; f++) {
         nodesDataSet.update({
             id: nodeId,
-            label: `${shortName}\n[IMPACT ⚡]`,
-            size: f % 2 === 0 ? 27 : 22,
+            label: `${shortName}\n• Impact`,
+            size: f % 2 === 0 ? 26 : 21,
             image: getNodeSvgIcon(nodeType, flashColors[f])
         });
-        await new Promise(resolve => setTimeout(resolve, 160));
+        await new Promise(resolve => setTimeout(resolve, 150));
     }
 
     nodesDataSet.update({
         id: nodeId,
-        label: `${shortName}\n[EPICENTER]`,
+        label: `${shortName}\n• Epicenter`,
+        title: matchingNode ? buildPopoverTooltip(matchingNode, 'Epicenter Impact (Failed)') : nodeId,
         size: 24,
-        image: getNodeSvgIcon(nodeType, '#f85149')
+        image: getNodeSvgIcon(nodeType, '#ef4444')
     });
 }
 
@@ -649,18 +764,24 @@ async function animateExecutionTrace(trace) {
         const matchingNode = topologyNodes.find(n => n.name === nodeName || n.id === nodeName);
         const nodeId = matchingNode ? matchingNode.id : nodeName;
         const nodeType = matchingNode ? matchingNode.type : (step.node_type || 'energy');
-        const shortName = truncateLabel(nodeName, 15);
+        const shortName = truncateLabel(nodeName, 16);
 
         if (step.step === 'impact') {
             failedCount++;
             evaluatedSet.add(nodeId);
 
-            appendLog(
-                `[METEOROLOGICAL IMPACT] AI Epicenter Selected: "${nodeName}" — ${step.reasoning}`,
-                'trace-impact'
-            );
+            appendFeedCard({
+                variant: 'impact',
+                iconSvg: FEED_SVGS.impact,
+                iconClass: 'impact-icon',
+                title: nodeName,
+                pillText: 'Epicenter Impact',
+                pillClass: 'pill-impact',
+                description: step.reasoning,
+                pdfSummary: `[STEP 1/${trace.length}] [EPICENTER IMPACT] ${nodeName}: ${step.reasoning}`
+            });
 
-            await flashImpactNode(nodeId, nodeType, shortName);
+            await flashImpactNode(nodeId, nodeType, shortName, matchingNode);
 
             updateTelemetry({
                 state: 'RUNNING',
@@ -670,25 +791,25 @@ async function animateExecutionTrace(trace) {
                 survived: survivedCount
             });
 
-            await new Promise(resolve => setTimeout(resolve, 650));
+            await new Promise(resolve => setTimeout(resolve, 600));
             continue;
         }
 
         if (nodesDataSet && nodesDataSet.get(nodeId)) {
             nodesDataSet.update({
                 id: nodeId,
-                label: `${shortName}\n[EVAL...]`,
+                label: `${shortName}\n• Evaluating…`,
                 size: 23,
-                image: getNodeSvgIcon(nodeType, '#d29922')
+                image: getNodeSvgIcon(nodeType, '#eab308')
             });
 
             network.focus(nodeId, {
                 scale: 1.1,
-                animation: { duration: 400, easingFunction: 'easeInOutQuad' }
+                animation: { duration: 380, easingFunction: 'easeInOutQuad' }
             });
         }
 
-        await new Promise(resolve => setTimeout(resolve, 420));
+        await new Promise(resolve => setTimeout(resolve, 380));
 
         const survived = Boolean(step.status);
         if (survived) {
@@ -698,13 +819,16 @@ async function animateExecutionTrace(trace) {
         }
         evaluatedSet.add(nodeId);
 
-        const statusBadge = survived ? '[OK]' : '[FAIL]';
-        const statusStroke = survived ? '#00FF00' : '#f85149';
+        const statusBadge = survived ? '• Intact' : '• Failed';
+        const statusStroke = survived ? '#10b981' : '#ef4444';
 
         if (nodesDataSet && nodesDataSet.get(nodeId)) {
             nodesDataSet.update({
                 id: nodeId,
                 label: `${shortName}\n${statusBadge}`,
+                title: matchingNode
+                    ? buildPopoverTooltip(matchingNode, survived ? 'Operational (Survived)' : 'Cascade Failure')
+                    : nodeName,
                 size: survived ? 19 : 22,
                 image: getNodeSvgIcon(nodeType, statusStroke)
             });
@@ -724,10 +848,10 @@ async function animateExecutionTrace(trace) {
             matchingEdges.forEach(edge => {
                 edgesDataSet.update({
                     id: edge.id,
-                    width: 2.8,
+                    width: 2.6,
                     color: {
-                        color: survived ? '#00ff00' : '#f85149',
-                        highlight: survived ? '#00ff00' : '#f85149'
+                        color: survived ? '#10b981' : '#ef4444',
+                        highlight: survived ? '#34d399' : '#f87171'
                     }
                 });
             });
@@ -741,29 +865,45 @@ async function animateExecutionTrace(trace) {
             survived: survivedCount
         });
 
-        const logClass = survived ? 'trace-survive' : 'trace-fail';
-        const cascadeLabel = step.parent_node
-            ? `${step.parent_node} ➔ ${nodeName}`
-            : `${nodeName} (EPICENTER)`;
+        const connectionContext = step.parent_node
+            ? `${step.parent_node} → ${nodeName}`
+            : nodeName;
 
-        appendLog(
-            `[STEP ${stepNum}/${trace.length}] ${cascadeLabel} [${survived ? 'SURVIVED' : 'FAILED'}]: ${step.reasoning}`,
-            logClass
-        );
-
-        if (step.recovery_command) {
-            await typewriterLog(step.recovery_command, 20);
+        if (survived) {
+            appendFeedCard({
+                variant: 'survive',
+                iconSvg: FEED_SVGS.survive,
+                iconClass: 'survive-icon',
+                title: nodeName,
+                pillText: 'Survived',
+                pillClass: 'pill-survive',
+                description: `${step.reasoning} (Dependency: ${connectionContext})`,
+                pdfSummary: `[STEP ${stepNum}/${trace.length}] ${connectionContext} [SURVIVED]: ${step.reasoning}`
+            });
+        } else {
+            appendFeedCard({
+                variant: 'fail',
+                iconSvg: FEED_SVGS.fail,
+                iconClass: 'fail-icon',
+                title: nodeName,
+                pillText: 'Cascade Failure',
+                pillClass: 'pill-fail',
+                description: `${step.reasoning} (Upstream failure: ${step.parent_node || 'Epicenter'})`,
+                pdfSummary: `[STEP ${stepNum}/${trace.length}] ${connectionContext} [FAILED]: ${step.reasoning}`
+            });
         }
 
         if (step.new_edge && step.new_edge.source && step.new_edge.target && edgesDataSet) {
+            await new Promise(resolve => setTimeout(resolve, 320));
+
             const healEdgeId = `heal_edge_${stepNum}_${step.new_edge.source}_${step.new_edge.target}`;
             if (!edgesDataSet.get(healEdgeId)) {
                 edgesDataSet.add({
                     id: healEdgeId,
                     from: step.new_edge.source,
                     to: step.new_edge.target,
-                    color: { color: '#00FFFF', highlight: '#00FFFF' },
-                    dashes: true,
+                    color: { color: '#38bdf8', highlight: '#7dd3fc' },
+                    dashes: [6, 5],
                     arrows: 'to',
                     width: 2.8
                 });
@@ -775,23 +915,50 @@ async function animateExecutionTrace(trace) {
             if (nodesDataSet && nodesDataSet.get(nodeId)) {
                 nodesDataSet.update({
                     id: nodeId,
-                    label: `${shortName}\n[SAVED]`,
+                    label: `${shortName}\n• AI Restored`,
+                    title: matchingNode
+                        ? buildPopoverTooltip(matchingNode, `AI Restored via ${step.new_edge.source}`)
+                        : nodeName,
                     size: 22,
-                    image: getNodeSvgIcon(nodeType, '#00FFFF')
+                    image: getNodeSvgIcon(nodeType, '#38bdf8')
                 });
             }
 
-            appendLog(
-                `Node saved by rerouting (${step.new_edge.source} ➔ ${step.new_edge.target}).`,
-                'trace-saved node-saved'
-            );
+            const estCost = step.new_edge.estimated_cost ?? step.estimated_cost;
+            const recTimeMs = step.new_edge.recovery_time_ms ?? step.recovery_time_ms;
+            const metricsSuffix = (estCost !== undefined && estCost !== null && recTimeMs !== undefined && recTimeMs !== null)
+                ? ` (Est. Cost: $${Number(estCost).toLocaleString()} • Latency: ${recTimeMs} ms)`
+                : '';
+            const rerouteSummary = `Emergency supply rerouted from ${step.new_edge.source} to ${step.new_edge.target} — service restored.${metricsSuffix}`;
+            appendFeedCard({
+                variant: 'recovery',
+                iconSvg: FEED_SVGS.shield,
+                iconClass: 'recovery-icon',
+                title: 'AI Rerouting Active',
+                pillText: `${step.new_edge.source} → ${step.new_edge.target}`,
+                pillClass: 'pill-recovery',
+                description: rerouteSummary,
+                technicalCommand: step.recovery_command || `ln -s /city/grid/${step.new_edge.source} /city/grid/${step.new_edge.target}`,
+                pdfSummary: `[AI REROUTING ACTIVE] ${rerouteSummary}${step.recovery_command ? ` | CMD: $ ${step.recovery_command}` : ''}`
+            });
 
-            await new Promise(resolve => setTimeout(resolve, 900));
+            await new Promise(resolve => setTimeout(resolve, 750));
         } else if (step.recovery_command) {
-            appendLog('Node saved by rerouting.', 'trace-saved node-saved');
-            await new Promise(resolve => setTimeout(resolve, 650));
-        } else {
+            await new Promise(resolve => setTimeout(resolve, 300));
+            appendFeedCard({
+                variant: 'recovery',
+                iconSvg: FEED_SVGS.shield,
+                iconClass: 'recovery-icon',
+                title: 'AI Rerouting Active',
+                pillText: nodeName,
+                pillClass: 'pill-recovery',
+                description: `Automated emergency rerouting protocol executed for ${nodeName}.`,
+                technicalCommand: step.recovery_command,
+                pdfSummary: `[AI REROUTING ACTIVE] Emergency protocol executed for ${nodeName} | CMD: $ ${step.recovery_command}`
+            });
             await new Promise(resolve => setTimeout(resolve, 550));
+        } else {
+            await new Promise(resolve => setTimeout(resolve, 500));
         }
     }
 
@@ -803,13 +970,13 @@ async function animateExecutionTrace(trace) {
         survived: survivedCount
     });
 
-    appendLog(
-        `[COMPLETE] Simulation finished — ${failedCount} failed (${savedNodeIds.size} rerouted by AI), ${survivedCount} survived intact.`,
-        'system-msg'
+    appendSystemCard(
+        'Cascade Assessment Complete',
+        `${failedCount} nodes impacted (${savedNodeIds.size} automatically restored via AI rerouting), ${survivedCount} remained intact.`
     );
 
     if (network) {
-        network.fit({ animation: { duration: 800, easingFunction: 'easeInOutQuad' } });
+        network.fit({ animation: { duration: 750, easingFunction: 'easeInOutQuad' } });
     }
 
     const exportPdfBtn = document.getElementById('export-pdf-btn');
@@ -819,7 +986,7 @@ async function animateExecutionTrace(trace) {
 }
 
 /**
- * Task 2: Captures the vis-network canvas snapshot and #console-log execution trace,
+ * Captures the vis-network canvas snapshot and Incident Timeline feed,
  * populates #pdf-template, and generates a downloadable WeatherFall_Report.pdf via html2pdf.js.
  */
 async function exportPDFReport() {
@@ -832,20 +999,18 @@ async function exportPDFReport() {
     if (!pdfTemplate || !mapSnapshotImg || !traceLogPre) return;
 
     if (typeof html2pdf === 'undefined') {
-        appendLog('[ERROR] html2pdf.js library is not loaded.', 'trace-fail');
+        appendSystemCard('PDF Export Unavailable', 'The html2pdf.js library could not be loaded.');
         return;
     }
 
-    const originalBtnText = exportPdfBtn ? exportPdfBtn.textContent : '[ EXPORT REPORT (PDF) ]';
+    const originalBtnHTML = exportPdfBtn ? exportPdfBtn.innerHTML : 'Export Incident Report (PDF)';
     if (exportPdfBtn) {
         exportPdfBtn.disabled = true;
-        exportPdfBtn.textContent = '[ GENERATING PDF... ]';
+        exportPdfBtn.textContent = 'Generating PDF Report…';
     }
 
-    appendLog('[REPORT] Capturing map topology and execution trace for PDF export...', 'system-msg');
-
     try {
-        // Populate incident metadata placeholders
+        // 1. Populate incident metadata placeholders
         const disasterSelect = document.getElementById('disaster-type');
         const magnitudeInput = document.getElementById('disaster-magnitude');
         const trajectoryInput = document.getElementById('disaster-trajectory');
@@ -865,27 +1030,84 @@ async function exportPDFReport() {
         if (pdfOutcome) {
             const failedVal = statFailed ? statFailed.textContent : '0';
             const survivedVal = statSurvived ? statSurvived.textContent : '0';
-            pdfOutcome.textContent = `${failedVal} Failed (${savedNodeIds.size} Saved by AI) / ${survivedVal} Survived`;
+            pdfOutcome.textContent = `${failedVal} Impacted (${savedNodeIds.size} Restored by AI) / ${survivedVal} Intact`;
         }
 
-        // Capture the vis-network canvas Data URL
+        // 2. Extract structured timeline entries from #console-log into #pdf-trace-log
+        if (consoleLog) {
+            const rawLines = Array.from(consoleLog.querySelectorAll('.log-line'))
+                .map(el => (el.dataset && el.dataset.pdfSummary) ? el.dataset.pdfSummary : el.textContent.trim())
+                .filter(Boolean);
+            const linesToRender = rawLines.length > 0
+                ? rawLines
+                : consoleLog.innerText.split('\n').map(l => l.trim()).filter(Boolean);
+
+            traceLogPre.innerHTML = '';
+            linesToRender.forEach((lineText) => {
+                const lineDiv = document.createElement('div');
+                lineDiv.className = 'pdf-trace-line';
+                if (lineText.includes('[AI REROUTING ACTIVE]') || lineText.includes('[AI OVERRIDE]')) {
+                    lineDiv.classList.add('pdf-trace-cmd');
+                } else if (lineText.includes('[FAILED]') || lineText.includes('[EPICENTER IMPACT]')) {
+                    lineDiv.classList.add('pdf-trace-fail');
+                } else if (lineText.includes('[SURVIVED]')) {
+                    lineDiv.classList.add('pdf-trace-ok');
+                }
+
+                const tokens = lineText.split(/\s+/);
+                tokens.forEach((token, idx) => {
+                    const subParts = token.split(/(?<=\/)/);
+                    subParts.forEach((part) => {
+                        if (!part) return;
+                        const wordSpan = document.createElement('span');
+                        wordSpan.className = 'pdf-word';
+                        wordSpan.textContent = part;
+                        lineDiv.appendChild(wordSpan);
+                    });
+                    if (idx < tokens.length - 1) {
+                        lineDiv.appendChild(document.createTextNode(' '));
+                    }
+                });
+
+                traceLogPre.appendChild(lineDiv);
+            });
+        }
+
+        // 3. Fit and capture the vis-network canvas onto a properly proportioned dark snapshot canvas
         if (network) {
+            network.fit({ animation: false });
             network.redraw();
         }
-        const canvasData = network.canvas.getContext().canvas.toDataURL('image/png');
+        const rawCanvas = network.canvas.getContext().canvas;
+        const snapshotCanvas = document.createElement('canvas');
+        const targetWidth = 1200;
+        const targetHeight = 520;
+        snapshotCanvas.width = targetWidth;
+        snapshotCanvas.height = targetHeight;
+        const sCtx = snapshotCanvas.getContext('2d');
+        sCtx.fillStyle = '#090d14';
+        sCtx.fillRect(0, 0, targetWidth, targetHeight);
+
+        if (rawCanvas && rawCanvas.width > 0 && rawCanvas.height > 0) {
+            const pad = 16;
+            const availW = targetWidth - pad * 2;
+            const availH = targetHeight - pad * 2;
+            const scale = Math.min(availW / rawCanvas.width, availH / rawCanvas.height);
+            const drawW = rawCanvas.width * scale;
+            const drawH = rawCanvas.height * scale;
+            const offsetX = (targetWidth - drawW) / 2;
+            const offsetY = (targetHeight - drawH) / 2;
+            sCtx.drawImage(rawCanvas, offsetX, offsetY, drawW, drawH);
+        }
+
+        const canvasData = snapshotCanvas.toDataURL('image/png');
         await new Promise((resolve) => {
             mapSnapshotImg.onload = resolve;
             mapSnapshotImg.onerror = resolve;
             mapSnapshotImg.src = canvasData;
         });
 
-        // Clone text content from live #console-log terminal into #pdf-trace-log
-        if (consoleLog) {
-            const lines = Array.from(consoleLog.querySelectorAll('.log-line')).map(el => el.textContent.trim());
-            traceLogPre.textContent = lines.length > 0 ? lines.join('\n') : consoleLog.innerText.trim();
-        }
-
-        // Temporarily display #pdf-template, generate PDF via html2pdf.js, then hide again
+        // 4. Temporarily display #pdf-template, generate PDF via html2pdf.js, and hide again
         pdfTemplate.style.display = 'block';
 
         await html2pdf()
@@ -893,29 +1115,51 @@ async function exportPDFReport() {
                 margin: 10,
                 filename: 'WeatherFall_Report.pdf',
                 image: { type: 'jpeg', quality: 0.98 },
-                html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+                pagebreak: {
+                    mode: ['css', 'legacy'],
+                    avoid: [
+                        '.pdf-report-header',
+                        '.pdf-summary-grid',
+                        '.pdf-snapshot-frame',
+                        '.pdf-section-title',
+                        '.pdf-trace-line'
+                    ]
+                },
+                html2canvas: {
+                    scale: 2,
+                    useCORS: true,
+                    backgroundColor: '#ffffff'
+                },
                 jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
             })
-            .from(document.getElementById('pdf-template'))
+            .from(pdfTemplate)
             .save();
 
-        appendLog('[REPORT] WeatherFall_Report.pdf downloaded successfully.', 'trace-survive');
+        appendSystemCard('Incident Report Exported', 'Downloaded WeatherFall_Report.pdf successfully.');
     } catch (err) {
-        appendLog(`[ERROR] Failed to export PDF report: ${err.message}`, 'trace-fail');
+        appendFeedCard({
+            variant: 'fail',
+            iconSvg: FEED_SVGS.fail,
+            iconClass: 'fail-icon',
+            title: 'PDF Export Error',
+            pillText: 'Error',
+            pillClass: 'pill-fail',
+            description: `Failed to export PDF report: ${err.message}`
+        });
     } finally {
         pdfTemplate.style.display = 'none';
         if (exportPdfBtn) {
             exportPdfBtn.disabled = false;
-            exportPdfBtn.textContent = originalBtnText;
+            exportPdfBtn.innerHTML = originalBtnHTML;
         }
     }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
     fetchAndRenderTopology();
-    updateAuthBar();                                        // ── AUTH ──
+    updateAuthBar();
 
-    const logoutBtn = document.getElementById('auth-logout-btn');   // ── AUTH ──
+    const logoutBtn = document.getElementById('auth-logout-btn');
     if (logoutBtn) logoutBtn.addEventListener('click', handleLogout);
 
     const runBtn = document.getElementById('run-btn');
@@ -928,25 +1172,118 @@ document.addEventListener('DOMContentLoaded', () => {
     const sidebar = document.getElementById('control-sidebar');
     const sidebarToggleBtn = document.getElementById('sidebar-toggle-btn');
     const consoleDrawer = document.getElementById('console-drawer');
+    const consoleResizer = document.getElementById('console-resizer');
     const consoleHeader = document.getElementById('console-header');
     const consoleToggleBtn = document.getElementById('console-toggle-btn');
 
+    let lastExpandedHeight = window.innerWidth <= 768 ? Math.round(window.innerHeight * 0.38) : 260;
+
     if (window.innerWidth <= 768 && consoleDrawer && consoleToggleBtn) {
         consoleDrawer.classList.add('collapsed');
-        consoleToggleBtn.textContent = '[ EXPAND ▲ ]';
+        consoleToggleBtn.textContent = 'Expand';
     }
 
     if (sidebarToggleBtn && sidebar) {
         sidebarToggleBtn.addEventListener('click', () => {
             const isCollapsed = sidebar.classList.toggle('collapsed');
-            sidebarToggleBtn.textContent = isCollapsed ? '[ CONTROLS ▼ ]' : '[ HIDE ▲ ]';
+            sidebarToggleBtn.textContent = isCollapsed ? 'Controls' : 'Hide';
         });
     }
 
-    if (consoleHeader && consoleDrawer && consoleToggleBtn) {
-        consoleHeader.addEventListener('click', () => {
-            const isCollapsed = consoleDrawer.classList.toggle('collapsed');
-            consoleToggleBtn.textContent = isCollapsed ? '[ EXPAND ▲ ]' : '[ COLLAPSE ▼ ]';
+    function toggleConsoleDrawer() {
+        if (!consoleDrawer || !consoleToggleBtn) return;
+        const isCollapsed = consoleDrawer.classList.toggle('collapsed');
+        if (!isCollapsed) {
+            consoleDrawer.style.height = `${lastExpandedHeight}px`;
+            consoleToggleBtn.textContent = 'Collapse';
+        } else {
+            consoleToggleBtn.textContent = 'Expand';
+        }
+        setTimeout(() => {
+            if (network) network.redraw();
+        }, 260);
+    }
+
+    if (consoleToggleBtn) {
+        consoleToggleBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleConsoleDrawer();
+        });
+    }
+
+    if (consoleDrawer && (consoleResizer || consoleHeader)) {
+        let isDragging = false;
+        let didMove = false;
+        let startY = 0;
+        let startHeight = 260;
+
+        const onPointerDown = (e) => {
+            if (e.target.closest('#console-toggle-btn')) return;
+            if (e.button !== undefined && e.button !== 0) return;
+
+            isDragging = true;
+            didMove = false;
+            startY = e.clientY;
+            startHeight = consoleDrawer.getBoundingClientRect().height;
+
+            if (e.currentTarget.setPointerCapture) {
+                try {
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                } catch (_) {}
+            }
+        };
+
+        const onPointerMove = (e) => {
+            if (!isDragging) return;
+            const deltaY = startY - e.clientY;
+
+            if (!didMove && Math.abs(deltaY) < 4) return;
+            didMove = true;
+
+            consoleDrawer.classList.add('is-resizing');
+            document.body.classList.add('resizing-drawer');
+
+            const maxAllowed = Math.floor(window.innerHeight * 0.82);
+            const rawHeight = startHeight + deltaY;
+
+            if (rawHeight <= 64) {
+                consoleDrawer.classList.add('collapsed');
+                if (consoleToggleBtn) consoleToggleBtn.textContent = 'Expand';
+            } else {
+                const clampedHeight = Math.min(maxAllowed, Math.max(96, Math.round(rawHeight)));
+                lastExpandedHeight = clampedHeight;
+                consoleDrawer.classList.remove('collapsed');
+                consoleDrawer.style.height = `${clampedHeight}px`;
+                if (consoleToggleBtn) consoleToggleBtn.textContent = 'Collapse';
+            }
+
+            if (network) {
+                network.redraw();
+            }
+        };
+
+        const stopDragging = (e) => {
+            if (!isDragging) return;
+            const wasHeaderClick = !didMove && e.currentTarget === consoleHeader;
+            isDragging = false;
+            didMove = false;
+
+            consoleDrawer.classList.remove('is-resizing');
+            document.body.classList.remove('resizing-drawer');
+
+            if (wasHeaderClick) {
+                toggleConsoleDrawer();
+            } else if (network) {
+                network.redraw();
+            }
+        };
+
+        [consoleResizer, consoleHeader].forEach(handle => {
+            if (!handle) return;
+            handle.addEventListener('pointerdown', onPointerDown);
+            handle.addEventListener('pointermove', onPointerMove);
+            handle.addEventListener('pointerup', stopDragging);
+            handle.addEventListener('pointercancel', stopDragging);
         });
     }
 
@@ -963,7 +1300,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (isSimulating) return;
             resetGraphState();
             if (network) network.fit({ animation: { duration: 500 } });
-            appendLog('[RESET] Map and topology state reset to standby.', 'system-msg');
+            appendSystemCard('Map Reset', 'Topology state restored to operational standby.');
         });
     }
 
@@ -992,7 +1329,6 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!chip || isSimulating) return;
             const traj = chip.dataset.trajectory || '';
             setTrajectoryInput(traj);
-            appendLog(`[TRAJECTORY SET] "${traj}"`, 'system-msg');
         });
     }
 });

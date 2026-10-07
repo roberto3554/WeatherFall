@@ -3,46 +3,62 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>WeatherFall - Miami Climate Risk Cascade Simulator</title>
+    <title>WeatherFall — Miami Critical Infrastructure Command Center</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=5">
 </head>
 <body>
     <div class="layout-container">
-        <!-- Sidebar / Mobile Floating Control Card -->
+        <!-- Floating Glassmorphic Command Center Sidebar -->
         <aside id="control-sidebar" class="sidebar">
             <div class="sidebar-header">
-                <div>
-                    <h1 class="logo">WeatherFall<span>_</span></h1>
-                    <p class="subtitle">Miami Infrastructure Cascade Engine</p>
+                <div class="brand-group">
+                    <div class="brand-badge">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>
+                            <path d="M13 11l-4 6h6l-4 6"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h1 class="logo">WeatherFall</h1>
+                        <p class="subtitle">Miami Infrastructure Command Center</p>
+                    </div>
                 </div>
                 <button type="button" id="sidebar-toggle-btn" class="mobile-toggle-btn" aria-label="Toggle Controls">
-                    [ HIDE ]
+                    Hide
                 </button>
             </div>
 
-            <!-- Auth bar -->
+            <!-- Operator Session Bar -->
             <div class="auth-bar" id="auth-bar">
-                <span class="auth-user" id="auth-user">guest</span>
-                <a class="auth-link hidden" id="auth-admin-link" href="/admin">[ ADMIN ]</a>
-                <a class="auth-link" id="auth-login-link" href="/login">[ LOGIN ]</a>
-                <button type="button" class="auth-link hidden" id="auth-logout-btn">[ LOGOUT ]</button>
+                <div class="auth-user-pill">
+                    <span class="status-dot"></span>
+                    <span class="auth-user" id="auth-user">guest</span>
+                </div>
+                <div class="auth-actions">
+                    <a class="auth-link hidden" id="auth-admin-link" href="/admin">Admin Console</a>
+                    <a class="auth-link" id="auth-login-link" href="/login">Sign In</a>
+                    <button type="button" class="auth-link hidden" id="auth-logout-btn">Sign Out</button>
+                </div>
             </div>
 
             <div id="sidebar-body" class="sidebar-body">
                 <div class="control-group">
-                    <label for="disaster-type">Disaster Type</label>
+                    <label for="disaster-type">Hazard Scenario</label>
                     <select id="disaster-type">
                         <option value="Hurricane">Hurricane</option>
-                        <option value="Coastal Storm Surge & Flash Flood">Coastal Storm Surge & Flash Flood</option>
+                        <option value="Coastal Storm Surge & Flash Flood">Coastal Storm Surge &amp; Flash Flood</option>
                         <option value="Tornado Outbreak">Tornado Outbreak</option>
-                        <option value="Extreme Heatwave & Grid Brownout">Extreme Heatwave & Grid Brownout</option>
+                        <option value="Extreme Heatwave & Grid Brownout">Extreme Heatwave &amp; Grid Brownout</option>
                     </select>
                 </div>
 
                 <div class="control-group">
-                    <label for="disaster-magnitude">Disaster Magnitude</label>
+                    <label for="disaster-magnitude">Intensity &amp; Magnitude</label>
                     <input
                         type="text"
                         id="disaster-magnitude"
@@ -61,7 +77,7 @@
 
                 <div class="control-group search-group">
                     <div class="label-row">
-                        <label for="disaster-trajectory">Disaster Trajectory (Miami, FL)</label>
+                        <label for="disaster-trajectory">Approach Trajectory (Miami, FL)</label>
                         <span id="node-count-badge" class="badge">0 nodes</span>
                     </div>
                     <div class="search-input-wrapper">
@@ -72,15 +88,15 @@
                             value="Coming from the Atlantic East coast"
                             autocomplete="off"
                         >
-                        <button type="button" id="clear-search-btn" class="clear-btn" title="Clear trajectory">&times;</button>
+                        <button type="button" id="clear-search-btn" class="clear-btn" title="Clear trajectory" aria-label="Clear trajectory">&times;</button>
                     </div>
-                    <small class="hint-text">AI analyzes trajectory &amp; spatial coordinates to determine the initial impact epicenter.</small>
+                    <small class="hint-text">AI analyzes trajectory vectors and street-grid topology to identify the initial impact epicenter.</small>
                 </div>
 
                 <div class="control-group">
-                    <label>Quick-Select Trajectory Vectors</label>
+                    <label>Preset Approach Vectors</label>
                     <div id="quick-trajectories" class="quick-chips">
-                        <button type="button" class="chip active-chip" data-trajectory="Coming from the Atlantic East coast">Atlantic East Coast</button>
+                        <button type="button" class="chip active-chip" data-trajectory="Coming from the Atlantic East coast">Atlantic East</button>
                         <button type="button" class="chip" data-trajectory="Approaching from Biscayne Bay (Southeast)">Biscayne Bay (SE)</button>
                         <button type="button" class="chip" data-trajectory="Sweeping north from the Florida Straits (South)">Florida Straits (S)</button>
                         <button type="button" class="chip" data-trajectory="Moving east from the Everglades (West)">Everglades (West)</button>
@@ -88,29 +104,49 @@
                 </div>
 
                 <div class="button-row">
-                    <button id="run-btn" class="run-button">[ EXECUTE SIMULATION ]</button>
-                    <button id="reset-btn" class="reset-button">[ RESET MAP ]</button>
+                    <button id="run-btn" class="run-button">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                            <path d="M8 5.14v14l11-7-11-7z"/>
+                        </svg>
+                        <span>Run Simulation</span>
+                    </button>
+                    <button id="reset-btn" class="reset-button" title="Reset Map">
+                        <span>Reset</span>
+                    </button>
                 </div>
-                <button id="export-pdf-btn" class="export-button" disabled>[ EXPORT REPORT (PDF) ]</button>
-                <div id="loading-spinner" class="hidden">Executing cascade analysis...</div>
+
+                <button id="export-pdf-btn" class="export-button" disabled>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                        <polyline points="14 2 14 8 20 8"/>
+                        <line x1="12" y1="18" x2="12" y2="12"/>
+                        <polyline points="9 15 12 18 15 15"/>
+                    </svg>
+                    <span>Export Incident Report (PDF)</span>
+                </button>
+
+                <div id="loading-spinner" class="loading-banner hidden">
+                    <span class="spinner-ring"></span>
+                    <span>Analyzing street-grid cascade &amp; AI recovery...</span>
+                </div>
 
                 <div class="telemetry-panel">
-                    <div class="telemetry-title">CASCADE TELEMETRY</div>
+                    <div class="telemetry-title">Live Cascade Telemetry</div>
                     <div class="telemetry-grid">
                         <div class="telemetry-item">
-                            <span class="t-label">STATE</span>
+                            <span class="t-label">System Status</span>
                             <span id="stat-state" class="t-value state-idle">READY</span>
                         </div>
                         <div class="telemetry-item">
-                            <span class="t-label">EVALUATED</span>
+                            <span class="t-label">Evaluated</span>
                             <span id="stat-evaluated" class="t-value">0 / 0</span>
                         </div>
                         <div class="telemetry-item">
-                            <span class="t-label">FAILED</span>
+                            <span class="t-label">Impacted</span>
                             <span id="stat-failed" class="t-value val-fail">0</span>
                         </div>
                         <div class="telemetry-item">
-                            <span class="t-label">SURVIVED</span>
+                            <span class="t-label">Operational</span>
                             <span id="stat-survived" class="t-value val-survive">0</span>
                         </div>
                     </div>
@@ -126,22 +162,46 @@
                     <span class="legend-item"><i class="dot dot-transport"></i> Transport</span>
                     <span class="legend-item"><i class="dot dot-health"></i> Health</span>
                     <span class="legend-item"><i class="dot dot-comms"></i> Comms</span>
+                    <span class="legend-divider"></span>
                     <span class="legend-item"><i class="dot dot-fail"></i> Failed</span>
-                    <span class="legend-item"><i class="dot dot-survive"></i> Survived</span>
-                    <span class="legend-item"><i class="dot dot-saved node-saved"></i> Saved (AI)</span>
+                    <span class="legend-item"><i class="dot dot-survive"></i> Intact</span>
+                    <span class="legend-item"><i class="dot dot-saved node-saved"></i> AI Rerouted</span>
                 </div>
                 <div id="network-canvas"></div>
             </div>
 
+            <!-- Incident Timeline / Live Feed Drawer -->
             <section id="console-drawer" class="console-drawer">
+                <div id="console-resizer" class="console-resizer" title="Drag up or down to resize timeline">
+                    <span class="resizer-grip"></span>
+                </div>
                 <div id="console-header" class="console-header">
-                    <span class="console-title">&gt;_ EXECUTION TRACE TERMINAL</span>
+                    <div class="feed-header-left">
+                        <span class="feed-pulse-dot"></span>
+                        <span class="console-title">Live Incident Timeline</span>
+                        <span id="feed-count-badge" class="feed-badge">Standby</span>
+                    </div>
                     <button type="button" id="console-toggle-btn" class="console-toggle-btn">
-                        [ COLLAPSE ▼ ]
+                        Collapse
                     </button>
                 </div>
-                <div id="console-log">
-                    <div class="log-line system-msg">SYSTEM: Awaiting Miami simulation parameters...</div>
+                <div id="console-log" class="incident-feed">
+                    <div class="feed-card feed-card-system log-line">
+                        <div class="feed-card-icon system-icon">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"/>
+                                <line x1="12" y1="16" x2="12" y2="12"/>
+                                <line x1="12" y1="8" x2="12.01" y2="8"/>
+                            </svg>
+                        </div>
+                        <div class="feed-card-body">
+                            <div class="feed-card-header">
+                                <span class="feed-card-title">Command Center Ready</span>
+                                <span class="feed-card-time">Standby</span>
+                            </div>
+                            <p class="feed-card-desc">Awaiting Miami hazard simulation parameters to evaluate infrastructure resilience.</p>
+                        </div>
+                    </div>
                 </div>
             </section>
         </main>
@@ -192,6 +252,6 @@
         </div>
     </div>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=5"></script>
 </body>
 </html>
