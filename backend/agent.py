@@ -155,11 +155,14 @@ async def evaluate_node_failure(
     parent_name: str,
     disaster_type: str,
     magnitude: str = "Category 5",
+    route_distance: float = 0.0,
+    route_path_nodes: int = 0,
     available_nodes: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Evaluates whether a real-world child infrastructure node survives or cascade-fails
-    using the Groq LLM API, and orchestrates emergency self-healing rerouting if it fails.
+    using the Groq LLM API, analyzing the OpenStreetMap physical street-routing distance
+    and intersection count, and orchestrates emergency self-healing rerouting if it fails.
 
     Args:
         node_name: Real-world name of the child infrastructure node being evaluated.
@@ -167,6 +170,8 @@ async def evaluate_node_failure(
         parent_name: Name of the upstream parent node that failed.
         disaster_type: Type of climate disaster driving the cascade.
         magnitude: Physical intensity/scale metric of the disaster (e.g., 'Category 5', 'Water level +2.5m').
+        route_distance: Physical street network routing distance in meters.
+        route_path_nodes: Number of street intersections crossed along the physical route.
         available_nodes: Optional list of currently alive node names in the city graph for rerouting.
 
     Returns:
@@ -191,14 +196,17 @@ async def evaluate_node_failure(
     )
 
     system_prompt = (
-        f"You are an autonomous network orchestration AI. "
-        f"Parent node {parent_name} failed. Child node {node_name} is failing. "
-        f"If it fails, you MUST generate a recovery terminal command to reroute its supply "
-        f"from another available node in the city. "
-        f'Return strictly JSON: {{"status": false, "reasoning": "...", '
-        f'"recovery_command": "ln -s /city/grid/substation_b /city/grid/hospital", '
-        f'"new_edge": {{"source": "substation_b", "target": "{node_name}"}}}}.'
-        f" If the child node survives (status: true), set recovery_command and new_edge to null."
+        f"You are an autonomous critical infrastructure AI. "
+        f"A {disaster_type} (Magnitude: {magnitude}) has impacted the city. "
+        f'The {node_type} node "{node_name}" depends on "{parent_name}". '
+        f"This dependency relies on a physical surface route spanning {route_distance} meters "
+        f"across {route_path_nodes} intersections. "
+        f"Evaluate if this specific physical connection is severed by the disaster or if the node survives. "
+        f"If it fails, you MUST generate a recovery terminal command to reroute its supply from another alive node in the city. "
+        f'Return ONLY valid JSON: {{"status": boolean, '
+        f'"reasoning": "Explain why the physical route or node failed in max 25 words based on distance and disaster physics", '
+        f'"recovery_command": "ln -s /city/grid/... /city/grid/...", '
+        f'"new_edge": {{"source": "alive_node_id", "target": "{node_name}"}}}}.'
     )
 
     headers = {
@@ -213,9 +221,10 @@ async def evaluate_node_failure(
             {
                 "role": "user",
                 "content": (
-                    f'Disaster: {disaster_type} ({magnitude}). '
+                    f"Disaster: {disaster_type} (Magnitude: {magnitude}). "
                     f'Failed parent: "{parent_name}". '
-                    f'Child node: "{node_name}" (type: {node_type}).'
+                    f'Child node: "{node_name}" (type: {node_type}). '
+                    f"Physical surface route: {route_distance} meters across {route_path_nodes} intersections."
                     f"{available_str}"
                 ),
             },
@@ -233,10 +242,16 @@ async def evaluate_node_failure(
             response.raise_for_status()
 
             response_data = response.json()
-            raw_content = response_data["choices"][0]["message"]["content"]
-            parsed = json.loads(raw_content)
+            raw_content = str(response_data["choices"][0]["message"]["content"]).strip()
 
-            if "status" not in parsed or "reasoning" not in parsed:
+            # Strip markdown code fences if present before json.loads
+            if raw_content.startswith("```"):
+                raw_content = raw_content.strip("`")
+                if raw_content.lower().startswith("json"):
+                    raw_content = raw_content[4:].strip()
+
+            parsed = json.loads(raw_content)
+            if not isinstance(parsed, dict) or "status" not in parsed or "reasoning" not in parsed:
                 raise json.JSONDecodeError("Missing required keys in LLM JSON response", raw_content, 0)
 
             status = bool(parsed["status"])
@@ -265,11 +280,12 @@ async def evaluate_node_failure(
                 "new_edge": new_edge,
             }
 
-    except (httpx.TimeoutException, httpx.HTTPStatusError, httpx.HTTPError, json.JSONDecodeError, KeyError, ValueError) as exc:
+    except Exception as exc:
         print(f"[WARNING] Groq LLM evaluation failed for node '{node_name}': {exc}")
         return {
             "status": True,
-            "reasoning": "Fallback: LLM evaluation failed or timed out.",
+            "reasoning": "Fallback: Spatial evaluation timed out.",
             "recovery_command": None,
             "new_edge": None,
         }
+

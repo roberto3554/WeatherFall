@@ -157,7 +157,12 @@ async def load_infrastructure_graph(db: AsyncSession) -> nx.DiGraph:
             source_name = id_to_name.get(edge.source_node_id)
             target_name = id_to_name.get(edge.target_node_id)
             if source_name and target_name:
-                graph.add_edge(source_name, target_name)
+                graph.add_edge(
+                    source_name,
+                    target_name,
+                    routing_distance=edge.routing_distance,
+                    path_nodes=edge.path_nodes,
+                )
 
         return graph
     except Exception:
@@ -264,8 +269,10 @@ async def get_topology(db: AsyncSession = Depends(get_db)) -> dict[str, list[dic
             "target": str(target),
             "from": str(source),
             "to": str(target),
+            "routing_distance": edata.get("routing_distance"),
+            "path_nodes": edata.get("path_nodes"),
         }
-        for source, target in graph.edges()
+        for source, target, edata in graph.edges(data=True)
     ]
     return {"nodes": nodes_list, "edges": edges_list}
 
@@ -467,6 +474,16 @@ async def simulate_cascade(
             visited.add(child_name)
 
             child_type = str(graph.nodes[child_name].get("type", "unknown"))
+            edge_data = (
+                graph.get_edge_data(parent_name, child_name)
+                or graph.get_edge_data(child_name, parent_name)
+                or {}
+            )
+            raw_distance = edge_data.get("routing_distance")
+            route_distance = round(float(raw_distance), 2) if raw_distance is not None else 0.0
+            raw_path_nodes = edge_data.get("path_nodes")
+            route_path_nodes = len(raw_path_nodes) if isinstance(raw_path_nodes, list) else 0
+
             available_nodes = sorted(
                 [str(n) for n in graph.nodes if n not in failed_nodes and n != child_name],
                 key=lambda n: (0 if graph.nodes[n].get("type") == "energy" else 1, n),
@@ -479,6 +496,8 @@ async def simulate_cascade(
                     parent_name=parent_name,
                     disaster_type=request.disaster_type,
                     magnitude=magnitude,
+                    route_distance=route_distance,
+                    route_path_nodes=route_path_nodes,
                     available_nodes=available_nodes,
                 )
             except ValueError as exc:
