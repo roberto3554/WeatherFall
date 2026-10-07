@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>WeatherFall - Miami Climate Risk Cascade Simulator</title>
-    <!-- vis-network CDN -->
     <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
     <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -20,6 +19,14 @@
                 <button type="button" id="sidebar-toggle-btn" class="mobile-toggle-btn" aria-label="Toggle Controls">
                     [ HIDE ]
                 </button>
+            </div>
+
+            <!-- Auth bar -->
+            <div class="auth-bar" id="auth-bar">
+                <span class="auth-user" id="auth-user">guest</span>
+                <a class="auth-link hidden" id="auth-admin-link" href="/admin">[ ADMIN ]</a>
+                <a class="auth-link" id="auth-login-link" href="/login">[ LOGIN ]</a>
+                <button type="button" class="auth-link hidden" id="auth-logout-btn">[ LOGOUT ]</button>
             </div>
 
             <div id="sidebar-body" class="sidebar-body">
@@ -85,7 +92,6 @@
                 </div>
                 <div id="loading-spinner" class="hidden">Executing cascade analysis...</div>
 
-                <!-- Telemetry Summary Box -->
                 <div class="telemetry-panel">
                     <div class="telemetry-title">CASCADE TELEMETRY</div>
                     <div class="telemetry-grid">
@@ -110,7 +116,6 @@
             </div>
         </aside>
 
-        <!-- Main Workspace -->
         <main class="workspace">
             <div class="canvas-wrapper">
                 <div class="canvas-legend">
@@ -126,7 +131,6 @@
                 <div id="network-canvas"></div>
             </div>
 
-            <!-- Collapsible Terminal Drawer -->
             <section id="console-drawer" class="console-drawer">
                 <div id="console-header" class="console-header">
                     <span class="console-title">&gt;_ EXECUTION TRACE TERMINAL</span>

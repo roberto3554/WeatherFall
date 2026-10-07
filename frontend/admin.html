@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WeatherFall — Admin Console</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="admin-body">
+    <header class="admin-header">
+        <div class="admin-header-left">
+            <h1 class="logo">WeatherFall<span>_</span></h1>
+            <span class="admin-subtitle">CRITICAL INFRASTRUCTURE ADMIN</span>
+        </div>
+        <div class="admin-header-right">
+            <span class="auth-user" id="admin-user">—</span>
+            <a href="/" class="auth-link">[ MAP ]</a>
+            <button type="button" class="auth-link" id="admin-logout-btn">[ LOGOUT ]</button>
+        </div>
+    </header>
+
+    <main class="admin-layout">
+        <section class="admin-panel">
+            <h2 class="panel-title">+ REGISTER NEW CRITICAL NODE</h2>
+
+            <form id="node-form" class="node-form">
+                <div class="form-row">
+                    <div class="control-group">
+                        <label for="node-name">Facility Name</label>
+                        <input
+                            type="text"
+                            id="node-name"
+                            required
+                            maxlength="120"
+                            placeholder="e.g. Miami Central Hospital"
+                            spellcheck="false"
+                        >
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="control-group">
+                        <label for="node-type">Infrastructure Type</label>
+                        <select id="node-type" required>
+                            <option value="energy">Energy / Power</option>
+                            <option value="water">Water / Sanitation</option>
+                            <option value="transport">Transport / Logistics</option>
+                            <option value="health">Health / Medical</option>
+                            <option value="comms">Communications / Telecom</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-row two-col">
+                    <div class="control-group">
+                        <label for="node-x">X (longitude / canvas x)</label>
+                        <input type="number" step="any" id="node-x" required placeholder="-80.1918">
+                    </div>
+                    <div class="control-group">
+                        <label for="node-y">Y (latitude / canvas y)</label>
+                        <input type="number" step="any" id="node-y" required placeholder="25.7617">
+                    </div>
+                </div>
+
+                <div class="form-actions">
+                    <button type="submit" class="run-button" id="node-submit">[ CREATE NODE ]</button>
+                    <button type="button" class="reset-button" id="node-reset">[ CLEAR ]</button>
+                </div>
+
+                <div id="node-form-msg" class="form-msg hidden" role="status"></div>
+
+                <p class="hint-text">
+                    New nodes are auto-connected to the nearest compatible facility in the dependency graph.
+                    Reload the map to see the update.
+                </p>
+            </form>
+        </section>
+
+        <section class="admin-panel admin-panel-wide">
+            <h2 class="panel-title">◈ REGISTERED NODES (<span id="nodes-count">0</span>)</h2>
+
+            <div class="nodes-table-wrapper">
+                <table class="nodes-table" id="nodes-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>NAME</th>
+                            <th>TYPE</th>
+                            <th>X</th>
+                            <th>Y</th>
+                            <th>ACTION</th>
+                        </tr>
+                    </thead>
+                    <tbody id="nodes-tbody">
+                        <tr><td colspan="6" class="table-empty">Loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <script src="/static/admin.js"></script>
+</body>
+</html>

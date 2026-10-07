@@ -3,15 +3,52 @@
 let network = null;
 let nodesDataSet = null;
 let edgesDataSet = null;
-let topologyNodes = []; // Stores [{ id, name, type, rawX, rawY, x, y }]
+let topologyNodes = [];
 let isSimulating = false;
 let activeDropdownIndex = -1;
 
-// Preload the dark-mode Miami map image
+// ── AUTH ──
+const AUTH_TOKEN_KEY = 'weatherfall_token';
+const AUTH_USER_KEY = 'weatherfall_username';
+const AUTH_ADMIN_KEY = 'weatherfall_is_admin';
+
+function updateAuthBar() {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    const username = localStorage.getItem(AUTH_USER_KEY) || 'guest';
+    const isAdmin = localStorage.getItem(AUTH_ADMIN_KEY) === 'true';
+
+    const userEl = document.getElementById('auth-user');
+    const adminLink = document.getElementById('auth-admin-link');
+    const loginLink = document.getElementById('auth-login-link');
+    const logoutBtn = document.getElementById('auth-logout-btn');
+
+    if (!userEl || !adminLink || !loginLink || !logoutBtn) return;
+
+    if (token) {
+        userEl.textContent = `${username}${isAdmin ? '@admin' : ''}`;
+        adminLink.classList.toggle('hidden', !isAdmin);
+        loginLink.classList.add('hidden');
+        logoutBtn.classList.remove('hidden');
+    } else {
+        userEl.textContent = 'guest';
+        adminLink.classList.add('hidden');
+        loginLink.classList.remove('hidden');
+        logoutBtn.classList.add('hidden');
+    }
+}
+
+function handleLogout() {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    localStorage.removeItem(AUTH_USER_KEY);
+    localStorage.removeItem(AUTH_ADMIN_KEY);
+    updateAuthBar();
+    appendLog('[AUTH] Session terminated.', 'system-msg');
+}
+// ── /AUTH ──
+
 const mapImage = new Image();
 mapImage.src = '/static/miami-dark-map.png';
 
-// Geographic bounds matching the rendered miami-dark-map.png
 const MIAMI_GEO_BOUNDS = {
     minLon: -80.32,
     maxLon: -80.12,
@@ -19,7 +56,6 @@ const MIAMI_GEO_BOUNDS = {
     maxLat: 25.86
 };
 
-// Canvas bounding box dimensions used by beforeDrawing ctx.drawImage()
 let mapBounds = {
     centerX: 0,
     centerY: 0,
@@ -33,17 +69,10 @@ mapImage.onload = function () {
     }
 };
 
-/**
- * Helper to encode raw SVG markup into a valid data URI.
- */
 function toSvgDataUri(svgString) {
     return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgString.trim());
 }
 
-/**
- * Generates minimalist, terminal-style inline SVG string for each infrastructure type.
- * Supports an optional strokeOverride for simulation states (evaluating, failed, survived).
- */
 function createTerminalSvg(nodeType = 'energy', strokeOverride = null) {
     const type = String(nodeType).toLowerCase();
 
@@ -83,7 +112,6 @@ function createTerminalSvg(nodeType = 'energy', strokeOverride = null) {
         </svg>`;
     }
 
-    // Default: 'energy' / power lightning bolt (#00FF00)
     const stroke = strokeOverride || '#00FF00';
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="36" height="36">
         <circle cx="18" cy="18" r="16" fill="#060c14" fill-opacity="0.78" stroke="${stroke}" stroke-width="1.8"/>
@@ -91,7 +119,6 @@ function createTerminalSvg(nodeType = 'energy', strokeOverride = null) {
     </svg>`;
 }
 
-// Task 1: Dictionary of inline SVG data URIs for each node type
 const SVG_ICONS = {
     energy: toSvgDataUri(createTerminalSvg('energy')),
     health: toSvgDataUri(createTerminalSvg('health')),
@@ -100,9 +127,6 @@ const SVG_ICONS = {
     transport: toSvgDataUri(createTerminalSvg('transport'))
 };
 
-/**
- * Returns the appropriate inline SVG data URI for a given node type and optional status stroke color.
- */
 function getNodeSvgIcon(nodeType = 'energy', strokeOverride = null) {
     if (strokeOverride) {
         return toSvgDataUri(createTerminalSvg(nodeType, strokeOverride));
@@ -115,18 +139,11 @@ function getNodeSvgIcon(nodeType = 'energy', strokeOverride = null) {
     return SVG_ICONS.energy;
 }
 
-/**
- * Task 2: Truncates a node label to max 15 characters with ellipsis (...)
- */
 function truncateLabel(name = '', maxLen = 15) {
     const str = String(name).trim();
     return str.length > maxLen ? str.slice(0, maxLen) + '...' : str;
 }
 
-/**
- * Projects geographic (lon, lat) or raw (x, y) coordinates onto locked canvas coordinates
- * aligned with the Miami background map bounding box.
- */
 function projectNodeCoordinates(rawX, rawY) {
     const x = Number(rawX) || 0;
     const y = Number(rawY) || 0;
@@ -143,10 +160,6 @@ function projectNodeCoordinates(rawX, rawY) {
     return { x, y };
 }
 
-/**
- * Gently pushes apart nearby nodes whose labels would overlap on screen
- * while preserving their relative geographic layout.
- */
 function declusterNodePositions(nodes, minDx = 135, minDy = 64, iterations = 35) {
     for (let iter = 0; iter < iterations; iter++) {
         let moved = false;
@@ -176,9 +189,6 @@ function declusterNodePositions(nodes, minDx = 135, minDy = 64, iterations = 35)
     }
 }
 
-/**
- * Calculates the bounding box dimensions across all projected nodes to center the map.
- */
 function calculateMapBounds(nodes) {
     if (!nodes || nodes.length === 0) {
         return { centerX: 0, centerY: 0, width: 1800, height: 1425 };
@@ -210,9 +220,6 @@ function calculateMapBounds(nodes) {
     };
 }
 
-/**
- * Appends a timestamped terminal log line to #console-log.
- */
 function appendLog(text, type = 'system-msg') {
     const consoleLog = document.getElementById('console-log');
     if (!consoleLog) return;
@@ -225,7 +232,6 @@ function appendLog(text, type = 'system-msg') {
     consoleLog.scrollTop = consoleLog.scrollHeight;
 }
 
-// Tracks nodes saved by Self-Healing AI rerouting and the AI-selected meteorological epicenter
 const savedNodeIds = new Set();
 let impactNodeId = null;
 let pulseAnimFrame = null;
@@ -245,10 +251,6 @@ function startCanvasPulseLoop() {
     pulseAnimFrame = requestAnimationFrame(tick);
 }
 
-/**
- * Task 2: Prints a recovery terminal command character by character with a strict
- * typewriter effect in bright cyan (.recovery-cmd) to simulate live override execution.
- */
 async function typewriterLog(commandText, charDelay = 22) {
     const consoleLog = document.getElementById('console-log');
     if (!consoleLog) return;
@@ -271,9 +273,6 @@ async function typewriterLog(commandText, charDelay = 22) {
     el.classList.remove('typing');
 }
 
-/**
- * Updates the sidebar telemetry counters.
- */
 function updateTelemetry({ state, evaluated, total, failed, survived }) {
     const statState = document.getElementById('stat-state');
     const statEvaluated = document.getElementById('stat-evaluated');
@@ -298,9 +297,6 @@ function updateTelemetry({ state, evaluated, total, failed, survived }) {
     }
 }
 
-/**
- * Resets all nodes and edges to their initial inline SVG icon state.
- */
 function resetGraphState() {
     if (!nodesDataSet || !edgesDataSet) return;
 
@@ -340,9 +336,6 @@ function resetGraphState() {
     });
 }
 
-/**
- * Sets the 'Disaster Trajectory' input field and highlights any matching quick-select chip.
- */
 function setTrajectoryInput(trajectoryText) {
     const trajectoryInput = document.getElementById('disaster-trajectory');
     if (trajectoryInput) {
@@ -354,10 +347,6 @@ function setTrajectoryInput(trajectoryText) {
     });
 }
 
-/**
- * Fetch topology from GET /api/v1/topology, map each node to its
- * inline SVG icon with truncated 15-char labels and full native hover tooltips.
- */
 async function fetchAndRenderTopology() {
     const container = document.getElementById('network-canvas');
     const nodeCountBadge = document.getElementById('node-count-badge');
@@ -456,7 +445,6 @@ async function fetchAndRenderTopology() {
             options
         );
 
-        // Synchronized Miami dark map rendering behind nodes
         network.on('beforeDrawing', function (ctx) {
             if (mapImage.complete && mapImage.naturalWidth > 0) {
                 const drawX = mapBounds.centerX - mapBounds.width / 2;
@@ -470,7 +458,6 @@ async function fetchAndRenderTopology() {
             }
         });
 
-        // Render critical impact shockwave ring on epicenter & pulsing cyan glow on AI-saved nodes
         network.on('afterDrawing', function (ctx) {
             if (savedNodeIds.size === 0 && !impactNodeId) return;
             const t = performance.now() / 1000;
@@ -478,7 +465,6 @@ async function fetchAndRenderTopology() {
 
             ctx.save();
 
-            // Critical shockwave ring around the AI-selected meteorological epicenter
             if (impactNodeId) {
                 const impactPositions = network.getPositions([impactNodeId]);
                 const impactPos = impactPositions[impactNodeId];
@@ -495,7 +481,6 @@ async function fetchAndRenderTopology() {
                 }
             }
 
-            // Subtle pulsing cyan glow ring around nodes 'saved' by the Self-Healing AI
             if (savedNodeIds.size > 0) {
                 const positions = network.getPositions(Array.from(savedNodeIds));
                 savedNodeIds.forEach(nodeId => {
@@ -536,9 +521,6 @@ async function fetchAndRenderTopology() {
     }
 }
 
-/**
- * Trigger POST /api/v1/simulate with trajectory and animate the cascade trace on the map.
- */
 async function runSimulation() {
     if (isSimulating) return;
 
@@ -620,9 +602,6 @@ async function runSimulation() {
     }
 }
 
-/**
- * Triggers a rapid critical flash sequence on the AI-selected epicenter node.
- */
 async function flashImpactNode(nodeId, nodeType, shortName) {
     if (!nodesDataSet || !nodesDataSet.get(nodeId)) return;
 
@@ -653,9 +632,6 @@ async function flashImpactNode(nodeId, nodeType, shortName) {
     });
 }
 
-/**
- * Sequentially animates the initial 'impact' epicenter step followed by each BFS cascade step.
- */
 async function animateExecutionTrace(trace) {
     let failedCount = 0;
     let survivedCount = 0;
@@ -670,7 +646,6 @@ async function animateExecutionTrace(trace) {
         const nodeType = matchingNode ? matchingNode.type : (step.node_type || 'energy');
         const shortName = truncateLabel(nodeName, 15);
 
-        // Task 3: Handle the initial meteorological 'impact' step with a critical flash
         if (step.step === 'impact') {
             failedCount++;
             evaluatedSet.add(nodeId);
@@ -771,12 +746,10 @@ async function animateExecutionTrace(trace) {
             logClass
         );
 
-        // Terminal Execution Effect with character-by-character typewriter animation
         if (step.recovery_command) {
             await typewriterLog(step.recovery_command, 20);
         }
 
-        // Dynamic Edge Injection & Visual Polish for 'saved' nodes
         if (step.new_edge && step.new_edge.source && step.new_edge.target && edgesDataSet) {
             const healEdgeId = `heal_edge_${stepNum}_${step.new_edge.source}_${step.new_edge.target}`;
             if (!edgesDataSet.get(healEdgeId)) {
@@ -835,11 +808,12 @@ async function animateExecutionTrace(trace) {
     }
 }
 
-/**
- * Initialize DOM event listeners, mobile drawer toggles, and topology on DOMContentLoaded.
- */
 document.addEventListener('DOMContentLoaded', () => {
     fetchAndRenderTopology();
+    updateAuthBar();                                        // ── AUTH ──
+
+    const logoutBtn = document.getElementById('auth-logout-btn');   // ── AUTH ──
+    if (logoutBtn) logoutBtn.addEventListener('click', handleLogout);
 
     const runBtn = document.getElementById('run-btn');
     const resetBtn = document.getElementById('reset-btn');

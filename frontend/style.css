@@ -142,7 +142,6 @@ select:focus, input:focus {
     box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.15);
 }
 
-/* Searchable Epicenter Combobox */
 .search-input-wrapper {
     position: relative;
     display: flex;
@@ -218,7 +217,6 @@ select:focus, input:focus {
     color: var(--text-muted);
 }
 
-/* Quick Select Chips */
 .quick-chips {
     display: flex;
     flex-wrap: wrap;
@@ -242,7 +240,6 @@ select:focus, input:focus {
     background-color: rgba(0, 255, 0, 0.08);
 }
 
-/* Action Buttons */
 .button-row {
     display: flex;
     flex-direction: column;
@@ -306,7 +303,6 @@ select:focus, input:focus {
     100% { opacity: 0.5; }
 }
 
-/* Telemetry Panel */
 .telemetry-panel {
     margin-top: auto;
     border: 1px solid var(--border-color);
@@ -347,7 +343,6 @@ select:focus, input:focus {
 .state-running { color: var(--warning); }
 .state-done { color: var(--text-terminal); }
 
-/* Workspace & Synchronized Map Canvas */
 .workspace {
     flex: 1;
     display: flex;
@@ -363,7 +358,6 @@ select:focus, input:focus {
     background-color: var(--bg-color);
 }
 
-/* Task 1: No static CSS background image on #network-canvas */
 #network-canvas {
     position: absolute;
     inset: 0;
@@ -414,7 +408,6 @@ select:focus, input:focus {
     border: 2px solid #a5f3fc;
 }
 
-/* Task 3: Subtle CSS glow & pulse animation for nodes 'saved' by the Self-Healing AI */
 @keyframes savedNodePulse {
     0% {
         box-shadow: 0 0 4px rgba(0, 255, 255, 0.55), 0 0 8px rgba(0, 255, 255, 0.35);
@@ -439,7 +432,6 @@ select:focus, input:focus {
     animation: savedNodePulse 1.8s infinite ease-in-out;
 }
 
-/* Collapsible Console Drawer */
 .console-drawer {
     height: 230px;
     background-color: #010409;
@@ -504,7 +496,6 @@ select:focus, input:focus {
 .trace-fail { color: var(--danger); }
 .trace-survive { color: var(--text-terminal); }
 
-/* Task 2: Bright cyan terminal override style with typewriter cursor */
 .recovery-cmd {
     color: #00FFFF;
     font-weight: bold;
@@ -540,7 +531,335 @@ select:focus, input:focus {
     animation: impactFlash 1.2s ease-in-out 3;
 }
 
-/* Task 3: Mobile-First Responsive Overlay Layout */
+/* =========================================================
+   AUTH BAR (inside sidebar)
+   ========================================================= */
+.auth-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.6rem;
+    background-color: #090d13;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    font-size: 0.72rem;
+}
+.auth-user {
+    color: var(--text-muted);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    letter-spacing: 0.4px;
+}
+.auth-link {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    padding: 0.18rem 0.45rem;
+    border-radius: 3px;
+    cursor: pointer;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: all 0.15s;
+}
+.auth-link:hover {
+    color: var(--text-terminal);
+    border-color: var(--text-terminal);
+}
+
+/* =========================================================
+   LOGIN PAGE
+   ========================================================= */
+.auth-body {
+    overflow: auto;
+    background:
+        radial-gradient(circle at center, #0d1117 0%, #060c14 70%),
+        var(--bg-color);
+}
+.login-page {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100dvh;
+    padding: 1.5rem;
+}
+.login-card {
+    width: 100%;
+    max-width: 420px;
+    background-color: rgba(22, 27, 34, 0.96);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 2rem 1.75rem;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8);
+    animation: cardIn 0.25s ease-out;
+}
+@keyframes cardIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.login-header {
+    text-align: center;
+    margin-bottom: 1.75rem;
+    padding-bottom: 1.25rem;
+    border-bottom: 1px solid var(--border-color);
+}
+.login-header .logo {
+    font-size: 1.6rem;
+}
+.login-form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+.login-form .run-button {
+    margin-top: 0.35rem;
+    padding: 0.85rem;
+}
+.login-error {
+    color: var(--danger);
+    font-size: 0.78rem;
+    padding: 0.5rem 0.7rem;
+    background-color: rgba(248, 81, 73, 0.08);
+    border: 1px solid rgba(248, 81, 73, 0.35);
+    border-radius: 4px;
+    text-align: center;
+}
+.login-footer {
+    margin-top: 1.5rem;
+    text-align: center;
+    border-top: 1px solid var(--border-color);
+    padding-top: 1rem;
+}
+
+/* =========================================================
+   ADMIN CONSOLE
+   ========================================================= */
+.admin-body {
+    overflow: auto;
+    background-color: var(--bg-color);
+    padding-bottom: 2rem;
+}
+.admin-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.9rem 1.5rem;
+    background-color: var(--sidebar-bg);
+    border-bottom: 1px solid var(--border-color);
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    flex-wrap: wrap;
+}
+.admin-header-left {
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+.admin-header .logo {
+    font-size: 1.2rem;
+}
+.admin-subtitle {
+    font-size: 0.72rem;
+    color: var(--text-terminal-dim);
+    letter-spacing: 1px;
+}
+.admin-header-right {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+}
+.admin-header-right .auth-user {
+    color: var(--text-terminal);
+    font-size: 0.75rem;
+}
+
+.admin-layout {
+    display: grid;
+    grid-template-columns: minmax(320px, 420px) 1fr;
+    gap: 1.25rem;
+    padding: 1.25rem;
+    max-width: 1400px;
+    margin: 0 auto;
+}
+@media (max-width: 900px) {
+    .admin-layout {
+        grid-template-columns: 1fr;
+    }
+}
+
+.admin-panel {
+    background-color: var(--sidebar-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 1.15rem;
+}
+.admin-panel-wide {
+    min-width: 0;
+}
+.panel-title {
+    font-size: 0.85rem;
+    color: var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border-color);
+    font-weight: bold;
+}
+
+.node-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+}
+.form-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+.form-row.two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+}
+.form-actions {
+    display: flex;
+    gap: 0.55rem;
+    margin-top: 0.25rem;
+}
+.form-actions .run-button {
+    flex: 2;
+    padding: 0.7rem;
+}
+.form-actions .reset-button {
+    flex: 1;
+}
+.form-msg {
+    font-size: 0.78rem;
+    padding: 0.55rem 0.75rem;
+    border-radius: 4px;
+    text-align: center;
+    border: 1px solid transparent;
+}
+.form-msg-success {
+    color: var(--text-terminal);
+    background-color: rgba(0, 255, 0, 0.06);
+    border-color: rgba(0, 255, 0, 0.35);
+}
+.form-msg-error {
+    color: var(--danger);
+    background-color: rgba(248, 81, 73, 0.08);
+    border-color: rgba(248, 81, 73, 0.35);
+}
+
+/* Nodes table */
+.nodes-table-wrapper {
+    max-height: 65vh;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background-color: #090d13;
+}
+.nodes-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+}
+.nodes-table thead th {
+    position: sticky;
+    top: 0;
+    background-color: #0d1117;
+    color: var(--text-terminal-dim);
+    font-weight: bold;
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    letter-spacing: 0.5px;
+    text-align: left;
+    padding: 0.55rem 0.75rem;
+    border-bottom: 1px solid var(--border-color);
+    z-index: 1;
+}
+.nodes-table tbody td {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid rgba(48, 54, 61, 0.4);
+    vertical-align: middle;
+}
+.nodes-table tbody tr:last-child td {
+    border-bottom: none;
+}
+.nodes-table tbody tr:hover {
+    background-color: rgba(88, 166, 255, 0.05);
+}
+.cell-id {
+    color: var(--text-muted);
+    font-size: 0.72rem;
+}
+.cell-name {
+    color: var(--text-primary);
+    max-width: 280px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.cell-num {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+}
+.table-empty {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 1.5rem !important;
+    font-style: italic;
+}
+.table-error {
+    color: var(--danger);
+}
+
+.type-badge {
+    display: inline-block;
+    font-size: 0.68rem;
+    padding: 0.15rem 0.45rem;
+    border-radius: 3px;
+    border: 1px solid currentColor;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+.type-energy    { color: #f0883e; }
+.type-water     { color: #00FFFF; }
+.type-transport { color: #FFA500; }
+.type-health    { color: #3fb950; }
+.type-comms     { color: #bc8cff; }
+
+.delete-btn {
+    background: transparent;
+    border: 1px solid rgba(248, 81, 73, 0.4);
+    color: var(--danger);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    padding: 0.2rem 0.55rem;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.delete-btn:hover {
+    background-color: rgba(248, 81, 73, 0.12);
+    border-color: var(--danger);
+}
+.delete-btn:disabled {
+    opacity: 0.5;
+    cursor: wait;
+}
+
+/* =========================================================
+   RESPONSIVE
+   ========================================================= */
 @media (max-width: 768px) {
     .layout-container {
         display: block;
@@ -548,7 +867,6 @@ select:focus, input:focus {
         height: 100dvh;
     }
 
-    /* Full-viewport background map canvas */
     .workspace {
         position: fixed;
         inset: 0;
@@ -582,7 +900,6 @@ select:focus, input:focus {
         gap: 0.6rem;
     }
 
-    /* Semi-transparent floating control card overlay */
     .sidebar {
         position: fixed;
         top: 10px;
@@ -608,28 +925,13 @@ select:focus, input:focus {
         display: inline-block;
     }
 
-    .logo {
-        font-size: 1.15rem;
-    }
-    .subtitle {
-        font-size: 0.7rem;
-    }
+    .logo { font-size: 1.15rem; }
+    .subtitle { font-size: 0.7rem; }
 
-    .button-row {
-        flex-direction: row;
-    }
-    .run-button {
-        flex: 2;
-        padding: 0.65rem;
-        font-size: 0.82rem;
-    }
-    .reset-button {
-        flex: 1;
-        padding: 0.65rem;
-        font-size: 0.74rem;
-    }
+    .button-row { flex-direction: row; }
+    .run-button { flex: 2; padding: 0.65rem; font-size: 0.82rem; }
+    .reset-button { flex: 1; padding: 0.65rem; font-size: 0.74rem; }
 
-    /* Collapsible terminal overlay at bottom of screen */
     .console-drawer {
         position: fixed;
         left: 0;
@@ -641,7 +943,10 @@ select:focus, input:focus {
         -webkit-backdrop-filter: blur(8px);
         z-index: 35;
     }
-    .console-drawer.collapsed {
-        height: 36px;
-    }
+    .console-drawer.collapsed { height: 36px; }
+
+    .admin-header { padding: 0.75rem 1rem; }
+    .admin-layout { padding: 0.85rem; gap: 1rem; }
+    .admin-panel { padding: 0.9rem; }
+    .cell-name { max-width: 160px; }
 }
