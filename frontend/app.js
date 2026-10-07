@@ -303,6 +303,11 @@ function resetGraphState() {
     savedNodeIds.clear();
     impactNodeId = null;
 
+    const exportPdfBtn = document.getElementById('export-pdf-btn');
+    if (exportPdfBtn) {
+        exportPdfBtn.disabled = true;
+    }
+
     const nodeUpdates = topologyNodes.map(node => ({
         id: node.id,
         label: truncateLabel(node.name, 15),
@@ -806,6 +811,104 @@ async function animateExecutionTrace(trace) {
     if (network) {
         network.fit({ animation: { duration: 800, easingFunction: 'easeInOutQuad' } });
     }
+
+    const exportPdfBtn = document.getElementById('export-pdf-btn');
+    if (exportPdfBtn) {
+        exportPdfBtn.disabled = false;
+    }
+}
+
+/**
+ * Task 2: Captures the vis-network canvas snapshot and #console-log execution trace,
+ * populates #pdf-template, and generates a downloadable WeatherFall_Report.pdf via html2pdf.js.
+ */
+async function exportPDFReport() {
+    const pdfTemplate = document.getElementById('pdf-template');
+    const mapSnapshotImg = document.getElementById('pdf-map-snapshot');
+    const traceLogPre = document.getElementById('pdf-trace-log');
+    const consoleLog = document.getElementById('console-log');
+    const exportPdfBtn = document.getElementById('export-pdf-btn');
+
+    if (!pdfTemplate || !mapSnapshotImg || !traceLogPre) return;
+
+    if (typeof html2pdf === 'undefined') {
+        appendLog('[ERROR] html2pdf.js library is not loaded.', 'trace-fail');
+        return;
+    }
+
+    const originalBtnText = exportPdfBtn ? exportPdfBtn.textContent : '[ EXPORT REPORT (PDF) ]';
+    if (exportPdfBtn) {
+        exportPdfBtn.disabled = true;
+        exportPdfBtn.textContent = '[ GENERATING PDF... ]';
+    }
+
+    appendLog('[REPORT] Capturing map topology and execution trace for PDF export...', 'system-msg');
+
+    try {
+        // Populate incident metadata placeholders
+        const disasterSelect = document.getElementById('disaster-type');
+        const magnitudeInput = document.getElementById('disaster-magnitude');
+        const trajectoryInput = document.getElementById('disaster-trajectory');
+        const statFailed = document.getElementById('stat-failed');
+        const statSurvived = document.getElementById('stat-survived');
+
+        const pdfTimestamp = document.getElementById('pdf-timestamp');
+        const pdfDisasterType = document.getElementById('pdf-disaster-type');
+        const pdfMagnitude = document.getElementById('pdf-disaster-magnitude');
+        const pdfTrajectory = document.getElementById('pdf-disaster-trajectory');
+        const pdfOutcome = document.getElementById('pdf-cascade-outcome');
+
+        if (pdfTimestamp) pdfTimestamp.textContent = new Date().toLocaleString('en-US', { hour12: false });
+        if (pdfDisasterType) pdfDisasterType.textContent = disasterSelect ? disasterSelect.value : 'Hurricane';
+        if (pdfMagnitude) pdfMagnitude.textContent = magnitudeInput ? magnitudeInput.value : 'Category 5';
+        if (pdfTrajectory) pdfTrajectory.textContent = trajectoryInput ? trajectoryInput.value : 'Atlantic East Coast';
+        if (pdfOutcome) {
+            const failedVal = statFailed ? statFailed.textContent : '0';
+            const survivedVal = statSurvived ? statSurvived.textContent : '0';
+            pdfOutcome.textContent = `${failedVal} Failed (${savedNodeIds.size} Saved by AI) / ${survivedVal} Survived`;
+        }
+
+        // Capture the vis-network canvas Data URL
+        if (network) {
+            network.redraw();
+        }
+        const canvasData = network.canvas.getContext().canvas.toDataURL('image/png');
+        await new Promise((resolve) => {
+            mapSnapshotImg.onload = resolve;
+            mapSnapshotImg.onerror = resolve;
+            mapSnapshotImg.src = canvasData;
+        });
+
+        // Clone text content from live #console-log terminal into #pdf-trace-log
+        if (consoleLog) {
+            const lines = Array.from(consoleLog.querySelectorAll('.log-line')).map(el => el.textContent.trim());
+            traceLogPre.textContent = lines.length > 0 ? lines.join('\n') : consoleLog.innerText.trim();
+        }
+
+        // Temporarily display #pdf-template, generate PDF via html2pdf.js, then hide again
+        pdfTemplate.style.display = 'block';
+
+        await html2pdf()
+            .set({
+                margin: 10,
+                filename: 'WeatherFall_Report.pdf',
+                image: { type: 'jpeg', quality: 0.98 },
+                html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+                jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+            })
+            .from(document.getElementById('pdf-template'))
+            .save();
+
+        appendLog('[REPORT] WeatherFall_Report.pdf downloaded successfully.', 'trace-survive');
+    } catch (err) {
+        appendLog(`[ERROR] Failed to export PDF report: ${err.message}`, 'trace-fail');
+    } finally {
+        pdfTemplate.style.display = 'none';
+        if (exportPdfBtn) {
+            exportPdfBtn.disabled = false;
+            exportPdfBtn.textContent = originalBtnText;
+        }
+    }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -817,6 +920,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const runBtn = document.getElementById('run-btn');
     const resetBtn = document.getElementById('reset-btn');
+    const exportPdfBtn = document.getElementById('export-pdf-btn');
     const trajectoryInput = document.getElementById('disaster-trajectory');
     const clearSearchBtn = document.getElementById('clear-search-btn');
     const quickTrajectoriesContainer = document.getElementById('quick-trajectories');
@@ -848,6 +952,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (runBtn) {
         runBtn.addEventListener('click', runSimulation);
+    }
+
+    if (exportPdfBtn) {
+        exportPdfBtn.addEventListener('click', exportPDFReport);
     }
 
     if (resetBtn) {

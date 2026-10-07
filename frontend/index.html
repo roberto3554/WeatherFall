@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>WeatherFall - Miami Climate Risk Cascade Simulator</title>
     <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -90,6 +91,7 @@
                     <button id="run-btn" class="run-button">[ EXECUTE SIMULATION ]</button>
                     <button id="reset-btn" class="reset-button">[ RESET MAP ]</button>
                 </div>
+                <button id="export-pdf-btn" class="export-button" disabled>[ EXPORT REPORT (PDF) ]</button>
                 <div id="loading-spinner" class="hidden">Executing cascade analysis...</div>
 
                 <div class="telemetry-panel">
@@ -144,6 +146,52 @@
             </section>
         </main>
     </div>
+
+    <!-- Hidden Printable Incident Report Template for html2pdf.js -->
+    <div id="pdf-template" style="display: none;">
+        <div class="pdf-report-header">
+            <div class="pdf-title-block">
+                <h1>WEATHERFALL - AUTOMATED INCIDENT REPORT</h1>
+                <p class="pdf-subtitle">Miami Critical Infrastructure Cascade &amp; Self-Healing Network Analysis</p>
+            </div>
+            <div class="pdf-meta-stamp">
+                <div><strong>DATE / TIME:</strong> <span id="pdf-timestamp">--</span></div>
+                <div><strong>LOCATION:</strong> Miami, Florida, USA</div>
+            </div>
+        </div>
+
+        <div class="pdf-summary-grid">
+            <div class="pdf-meta-box">
+                <span class="pdf-meta-label">DISASTER TYPE</span>
+                <span id="pdf-disaster-type" class="pdf-meta-value">--</span>
+            </div>
+            <div class="pdf-meta-box">
+                <span class="pdf-meta-label">MAGNITUDE</span>
+                <span id="pdf-disaster-magnitude" class="pdf-meta-value">--</span>
+            </div>
+            <div class="pdf-meta-box">
+                <span class="pdf-meta-label">TRAJECTORY VECTOR</span>
+                <span id="pdf-disaster-trajectory" class="pdf-meta-value">--</span>
+            </div>
+            <div class="pdf-meta-box">
+                <span class="pdf-meta-label">CASCADE OUTCOME</span>
+                <span id="pdf-cascade-outcome" class="pdf-meta-value">--</span>
+            </div>
+        </div>
+
+        <div class="pdf-section">
+            <h2 class="pdf-section-title">1. SPATIAL TOPOLOGY &amp; SELF-HEALING SNAPSHOT</h2>
+            <div class="pdf-snapshot-frame">
+                <img id="pdf-map-snapshot" alt="Miami Infrastructure Cascade Snapshot">
+            </div>
+        </div>
+
+        <div class="pdf-section">
+            <h2 class="pdf-section-title">2. AI EXECUTION TRACE &amp; RECOVERY LOG</h2>
+            <pre id="pdf-trace-log"></pre>
+        </div>
+    </div>
+
     <script src="/static/app.js"></script>
 </body>
 </html>
