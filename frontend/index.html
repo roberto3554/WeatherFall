@@ -53,31 +53,29 @@
 
                 <div class="control-group search-group">
                     <div class="label-row">
-                        <label for="epicenter-node">Epicenter Node (Miami, FL)</label>
+                        <label for="disaster-trajectory">Disaster Trajectory (Miami, FL)</label>
                         <span id="node-count-badge" class="badge">0 nodes</span>
                     </div>
                     <div class="search-input-wrapper">
                         <input
                             type="text"
-                            id="epicenter-node"
-                            placeholder="Search OSM Miami facility or sector..."
-                            value="Downtown Substation"
+                            id="disaster-trajectory"
+                            placeholder="e.g., Coming from the Atlantic East coast"
+                            value="Coming from the Atlantic East coast"
                             autocomplete="off"
                         >
-                        <button type="button" id="clear-search-btn" class="clear-btn" title="Show all nodes">&times;</button>
+                        <button type="button" id="clear-search-btn" class="clear-btn" title="Clear trajectory">&times;</button>
                     </div>
-                    <!-- Searchable interactive dropdown list of topology nodes -->
-                    <div id="epicenter-dropdown" class="epicenter-dropdown hidden"></div>
-                    <small class="hint-text">Tip: Tap any node on the map or type to filter.</small>
+                    <small class="hint-text">AI analyzes trajectory &amp; spatial coordinates to determine the initial impact epicenter.</small>
                 </div>
 
                 <div class="control-group">
-                    <label>Quick-Select OSM Miami Epicenters</label>
-                    <div id="quick-epicenters" class="quick-chips">
-                        <button type="button" class="chip" data-node="Miami Substation">Miami Sub</button>
-                        <button type="button" class="chip" data-node="Little River Substation">Little River Sub</button>
-                        <button type="button" class="chip" data-node="Douglas Substation">Douglas Sub</button>
-                        <button type="button" class="chip" data-node="Blue Lagoon Substation">Blue Lagoon Sub</button>
+                    <label>Quick-Select Trajectory Vectors</label>
+                    <div id="quick-trajectories" class="quick-chips">
+                        <button type="button" class="chip active-chip" data-trajectory="Coming from the Atlantic East coast">Atlantic East Coast</button>
+                        <button type="button" class="chip" data-trajectory="Approaching from Biscayne Bay (Southeast)">Biscayne Bay (SE)</button>
+                        <button type="button" class="chip" data-trajectory="Sweeping north from the Florida Straits (South)">Florida Straits (S)</button>
+                        <button type="button" class="chip" data-trajectory="Moving east from the Everglades (West)">Everglades (West)</button>
                     </div>
                 </div>
 
