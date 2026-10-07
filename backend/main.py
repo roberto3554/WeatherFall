@@ -14,13 +14,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 try:
-    from .agent import evaluate_node_failure
+    from .agent import determine_epicenter, evaluate_node_failure
     from .database import get_db, init_db
     from .models import Edge, Node, SimulationTrace
     from .schemas import NodeState, SimulationRequest
     from .seed_data import MIAMI_EDGES, MIAMI_NODES
 except ImportError:
-    from agent import evaluate_node_failure
+    from agent import determine_epicenter, evaluate_node_failure
     from database import get_db, init_db
     from models import Edge, Node, SimulationTrace
     from schemas import NodeState, SimulationRequest
@@ -43,7 +43,7 @@ FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 app = FastAPI(
     title="WeatherFall API",
     description="AI-driven climate risk cascade simulation API (Miami Infrastructure Edition).",
-    version="1.1.0",
+    version="1.2.0",
     lifespan=lifespan,
 )
 
@@ -155,40 +155,56 @@ async def simulate_cascade(
     db: AsyncSession = Depends(get_db),
 ) -> list[dict[str, Any]]:
     """
-    Executes an async Breadth-First Search (BFS) cascade simulation starting from
-    `epicenter_node`, propagates `magnitude` into every Groq LLM node evaluation,
-    persists the JSON trace (with magnitude) to PostgreSQL, and returns the trace.
+    Autonomously determines the meteorological epicenter from `request.trajectory`,
+    executes an async Breadth-First Search (BFS) self-healing cascade simulation,
+    persists the JSON trace to PostgreSQL, and returns the trace.
     """
     graph: nx.DiGraph = await load_infrastructure_graph(db)
     magnitude: str = request.magnitude
 
-    if request.epicenter_node not in graph:
-        valid_nodes = list(graph.nodes)
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"Epicenter node '{request.epicenter_node}' not found in infrastructure graph. "
-                f"Available nodes: {valid_nodes}"
-            ),
+    nodes_list: list[dict[str, Any]] = [
+        {
+            "id": str(node),
+            "name": str(node),
+            "type": str(data.get("type", "unknown")),
+            "x": round(float(data.get("x", 0.0)), 5),
+            "y": round(float(data.get("y", 0.0)), 5),
+        }
+        for node, data in graph.nodes(data=True)
+    ]
+
+    try:
+        epicenter_eval = await determine_epicenter(
+            disaster_type=request.disaster_type,
+            magnitude=magnitude,
+            trajectory=request.trajectory,
+            available_nodes=nodes_list,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    bfs_queue: deque[str] = deque([request.epicenter_node])
-    visited: set[str] = {request.epicenter_node}
-    failed_nodes: set[str] = {request.epicenter_node}
+    chosen_id: str = epicenter_eval["epicenter_id"]
+    llm_reasoning: str = epicenter_eval["reasoning"]
 
-    epicenter_type = str(graph.nodes[request.epicenter_node].get("type", "unknown"))
+    if chosen_id not in graph:
+        chosen_id = next(iter(graph.nodes))
+
+    bfs_queue: deque[str] = deque([chosen_id])
+    visited: set[str] = {chosen_id}
+    failed_nodes: set[str] = {chosen_id}
+
+    epicenter_type = str(graph.nodes[chosen_id].get("type", "unknown"))
     execution_trace: list[dict[str, Any]] = [
         {
+            "step": "impact",
+            "node": chosen_id,
             "parent_node": None,
-            "child_node": request.epicenter_node,
-            "node_name": request.epicenter_node,
+            "child_node": chosen_id,
+            "node_name": chosen_id,
             "node_type": epicenter_type,
             "magnitude": magnitude,
             "status": False,
-            "reasoning": (
-                f"Direct epicenter hit from {request.disaster_type} ({magnitude}) "
-                f"caused immediate failure at {request.epicenter_node}."
-            ),
+            "reasoning": llm_reasoning,
             "recovery_command": None,
             "new_edge": None,
         }
@@ -197,15 +213,20 @@ async def simulate_cascade(
     while bfs_queue:
         parent_name = bfs_queue.popleft()
 
-        for child_name in list(graph.successors(parent_name)):
+        neighbors = list(graph.successors(parent_name))
+        if not neighbors and parent_name == chosen_id:
+            neighbors = list(graph.predecessors(parent_name))
+
+        for child_name in neighbors:
             if child_name in visited:
                 continue
             visited.add(child_name)
 
             child_type = str(graph.nodes[child_name].get("type", "unknown"))
-            available_nodes = [
-                str(n) for n in graph.nodes if n not in failed_nodes and n != child_name
-            ]
+            available_nodes = sorted(
+                [str(n) for n in graph.nodes if n not in failed_nodes and n != child_name],
+                key=lambda n: (0 if graph.nodes[n].get("type") == "energy" else 1, n),
+            )
 
             try:
                 evaluation = await evaluate_node_failure(
@@ -238,10 +259,10 @@ async def simulate_cascade(
                     if raw_source in graph:
                         resolved_source = raw_source
                     else:
-                        norm_raw = raw_source.strip().lower().replace("_", " ").replace("-", " ")
+                        norm_raw = "".join(ch for ch in raw_source.lower() if ch.isalnum())
                         for candidate in graph.nodes:
-                            norm_cand = str(candidate).strip().lower().replace("_", " ").replace("-", " ")
-                            if norm_cand == norm_raw or norm_raw in norm_cand or norm_cand in norm_raw:
+                            norm_cand = "".join(ch for ch in str(candidate).lower() if ch.isalnum())
+                            if norm_raw and (norm_cand == norm_raw or norm_raw in norm_cand or norm_cand in norm_raw):
                                 resolved_source = str(candidate)
                                 break
 
@@ -259,6 +280,8 @@ async def simulate_cascade(
 
             execution_trace.append(
                 {
+                    "step": "cascade",
+                    "node": child_name,
                     "parent_node": parent_name,
                     "child_node": child_name,
                     "node_name": child_name,
@@ -282,7 +305,7 @@ async def simulate_cascade(
         trace_record = SimulationTrace(
             disaster_type=request.disaster_type,
             magnitude=magnitude,
-            epicenter_node=request.epicenter_node,
+            epicenter_node=chosen_id,
             trace_data=json.loads(serialized_trace),
         )
         db.add(trace_record)
