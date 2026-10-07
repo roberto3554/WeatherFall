@@ -6,7 +6,6 @@ import networkx as nx
 import numpy as np
 import osmnx as ox
 import pandas as pd
-from scipy.spatial import KDTree
 from sqlalchemy import delete, text
 
 try:
@@ -43,7 +42,6 @@ FALLBACK_WATER_NODES: list[dict[str, Any]] = [
     {"name": "Miami River Stormwater Pump", "type": "water", "x": -80.2140, "y": 25.7790},
 ]
 
-# Per-sector caps and minimum spatial separation (in degrees, ~0.008 deg ≈ 900m)
 MAX_PER_TYPE: dict[str, int] = {
     "energy": 12,
     "health": 7,
@@ -76,7 +74,12 @@ def classify_feature_type(row: pd.Series) -> str:
     return "energy"
 
 
-def is_too_close(lon: float, lat: float, existing_nodes: list[dict[str, Any]], min_dist: float = MIN_SEPARATION_DEG) -> bool:
+def is_too_close(
+    lon: float,
+    lat: float,
+    existing_nodes: list[dict[str, Any]],
+    min_dist: float = MIN_SEPARATION_DEG,
+) -> bool:
     """Returns True if (lon, lat) is within min_dist degrees of any already-accepted node."""
     for node in existing_nodes:
         dist = float(np.hypot(lon - node["x"], lat - node["y"]))
@@ -85,10 +88,23 @@ def is_too_close(lon: float, lat: float, existing_nodes: list[dict[str, Any]], m
     return False
 
 
+def fetch_street_network() -> nx.MultiDiGraph:
+    """
+    Task 1: Downloads the physical street network for Miami, Florida using OSMnx.
+    """
+    print(f"Downloading physical street network for '{PLACE_QUERY}' (network_type='drive')...")
+    street_graph: nx.MultiDiGraph = ox.graph_from_place(PLACE_QUERY, network_type="drive")
+    print(
+        f"Loaded Miami street network: {street_graph.number_of_nodes()} intersections, "
+        f"{street_graph.number_of_edges()} street segments."
+    )
+    return street_graph
+
+
 def extract_osm_miami_nodes() -> list[dict[str, Any]]:
     """
     Downloads critical infrastructure geometries for Miami, Florida from OpenStreetMap,
-    keeps named facilities with spatial separation so labels never stack on top of each other.
+    retaining named facilities with spatial separation.
     """
     print(f"Downloading OpenStreetMap features for '{PLACE_QUERY}' with tags={OSM_TAGS}...")
     gdf: gpd.GeoDataFrame = ox.features_from_place(PLACE_QUERY, tags=OSM_TAGS)
@@ -98,7 +114,13 @@ def extract_osm_miami_nodes() -> list[dict[str, Any]]:
 
     nodes: list[dict[str, Any]] = []
     seen_names: set[str] = set()
-    type_counts: dict[str, int] = {"energy": 0, "health": 0, "comms": 0, "water": 0, "transport": 0}
+    type_counts: dict[str, int] = {
+        "energy": 0,
+        "health": 0,
+        "comms": 0,
+        "water": 0,
+        "transport": 0,
+    }
 
     for _, row in gdf.iterrows():
         geom = row.geometry
@@ -107,7 +129,6 @@ def extract_osm_miami_nodes() -> list[dict[str, Any]]:
 
         raw_name = row.get("name")
         if pd.isna(raw_name) or not str(raw_name).strip():
-            # Skip unnamed OSM polygons/segments so the map only displays real named facilities
             continue
 
         clean_name = str(raw_name).strip()
@@ -122,7 +143,6 @@ def extract_osm_miami_nodes() -> list[dict[str, Any]]:
         lon = float(centroid.x)
         lat = float(centroid.y)
 
-        # Enforce minimum spatial separation so two nodes do not overlap on the canvas
         min_sep = 0.003 if node_type == "health" else MIN_SEPARATION_DEG
         if is_too_close(lon, lat, nodes, min_dist=min_sep):
             continue
@@ -139,32 +159,157 @@ def extract_osm_miami_nodes() -> list[dict[str, Any]]:
             }
         )
 
-    # Supplement comms exchange hubs
     for item in FALLBACK_COMMS_NODES:
         if item["name"] not in seen_names and type_counts["comms"] < MAX_PER_TYPE["comms"]:
-            nodes.append(item)
+            nodes.append(dict(item))
             seen_names.add(item["name"])
             type_counts["comms"] += 1
 
-    # Supplement water treatment/pumping stations
     for item in FALLBACK_WATER_NODES:
         if item["name"] not in seen_names and type_counts["water"] < MAX_PER_TYPE["water"]:
-            nodes.append(item)
+            nodes.append(dict(item))
             seen_names.add(item["name"])
             type_counts["water"] += 1
 
     return nodes
 
 
-def build_spatial_dependency_graph(nodes: list[dict[str, Any]]) -> nx.DiGraph:
+def snap_facilities_to_street_grid(
+    street_graph: nx.MultiDiGraph,
+    nodes: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """
-    Builds a directed NetworkX graph connecting spatial nodes using scipy.spatial.KDTree:
-      1. Every 'health', 'comms', and 'water' node connects as a target to its nearest 'energy' node (source).
-      2. Every 'health' node connects as a target to its nearest 'transport' node (source).
-      3. Every 'transport' node connects as a target to its nearest 'energy' node (source).
-      4. Secondary edges connect nearest 'comms' nodes and nearest 'energy' substations.
+    Task 2: Uses osmnx.nearest_nodes to snap each critical infrastructure facility's
+    (x=lon, y=lat) coordinate to the closest intersection node on the physical street graph.
+    """
+    if not nodes:
+        return nodes
+
+    lons = [float(n["x"]) for n in nodes]
+    lats = [float(n["y"]) for n in nodes]
+
+    try:
+        nearest_street_ids = ox.nearest_nodes(street_graph, X=lons, Y=lats)
+    except ImportError:
+        from scipy.spatial import KDTree
+
+        street_node_ids = [int(nid) for nid in street_graph.nodes]
+        street_coords = np.array(
+            [
+                [float(street_graph.nodes[nid]["x"]), float(street_graph.nodes[nid]["y"])]
+                for nid in street_node_ids
+            ],
+            dtype=float,
+        )
+        tree = KDTree(street_coords)
+        _, idxs = tree.query(np.column_stack([lons, lats]), k=1)
+        nearest_street_ids = [street_node_ids[int(i)] for i in np.atleast_1d(idxs)]
+
+    for node, street_node_id in zip(nodes, nearest_street_ids):
+        node["street_node_id"] = int(street_node_id)
+
+    return nodes
+
+
+def compute_street_route(
+    street_graph: nx.MultiDiGraph,
+    undirected_graph: nx.MultiGraph,
+    source_street_id: int,
+    target_street_id: int,
+) -> tuple[float, list[int]]:
+    """
+    Task 3: Calculates the shortest physical street network path and length (in meters)
+    between two snapped street intersection nodes using networkx.shortest_path_length()
+    and networkx.shortest_path(). Falls back to the undirected street corridor graph if
+    one-way traffic restrictions prevent a directed path.
+    """
+    if source_street_id == target_street_id:
+        return 0.0, [int(source_street_id)]
+
+    for g in (street_graph, undirected_graph):
+        try:
+            distance = float(
+                nx.shortest_path_length(
+                    g,
+                    source=source_street_id,
+                    target=target_street_id,
+                    weight="length",
+                )
+            )
+            path = [
+                int(nid)
+                for nid in nx.shortest_path(
+                    g,
+                    source=source_street_id,
+                    target=target_street_id,
+                    weight="length",
+                )
+            ]
+            return round(distance, 2), path
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            continue
+
+    return float("inf"), [int(source_street_id), int(target_street_id)]
+
+
+def find_k_nearest_by_street_network(
+    street_graph: nx.MultiDiGraph,
+    undirected_graph: nx.MultiGraph,
+    target_node: dict[str, Any],
+    candidate_sources: list[dict[str, Any]],
+    k: int = 1,
+) -> list[tuple[dict[str, Any], float, list[int]]]:
+    """
+    Finds the top-k candidate source facilities with the shortest physical street-network
+    routing distance to `target_node`.
+    """
+    scored: list[tuple[dict[str, Any], float, list[int]]] = []
+    target_street_id = int(target_node["street_node_id"])
+
+    for cand in candidate_sources:
+        if cand["name"] == target_node["name"]:
+            continue
+        source_street_id = int(cand["street_node_id"])
+        dist, path = compute_street_route(
+            street_graph,
+            undirected_graph,
+            source_street_id=source_street_id,
+            target_street_id=target_street_id,
+        )
+        if np.isfinite(dist):
+            scored.append((cand, dist, path))
+
+    if not scored and candidate_sources:
+        # Fallback if a facility is on an isolated island (e.g., Fisher Island)
+        for cand in candidate_sources:
+            if cand["name"] == target_node["name"]:
+                continue
+            euclid_meters = float(
+                np.hypot(cand["x"] - target_node["x"], cand["y"] - target_node["y"]) * 111_139.0
+            )
+            scored.append(
+                (
+                    cand,
+                    round(euclid_meters, 2),
+                    [int(cand["street_node_id"]), target_street_id],
+                )
+            )
+
+    scored.sort(key=lambda item: item[1])
+    return scored[:k]
+
+
+def build_street_dependency_graph(
+    street_graph: nx.MultiDiGraph,
+    nodes: list[dict[str, Any]],
+) -> nx.DiGraph:
+    """
+    Task 3: Builds a directed NetworkX dependency graph where every logical dependency edge
+    is routed through the real Miami street network using networkx.shortest_path_length()
+    and networkx.shortest_path(), storing `routing_distance` (m) and `path_nodes`.
     """
     graph = nx.DiGraph()
+    undirected_street = street_graph.to_undirected()
 
     for node in nodes:
         graph.add_node(
@@ -172,6 +317,7 @@ def build_spatial_dependency_graph(nodes: list[dict[str, Any]]) -> nx.DiGraph:
             type=node["type"],
             x=node["x"],
             y=node["y"],
+            street_node_id=node["street_node_id"],
         )
 
     energy_nodes = [n for n in nodes if n["type"] == "energy"]
@@ -180,76 +326,104 @@ def build_spatial_dependency_graph(nodes: list[dict[str, Any]]) -> nx.DiGraph:
     water_nodes = [n for n in nodes if n["type"] == "water"]
     transport_nodes = [n for n in nodes if n["type"] == "transport"]
 
-    # Rule 1: Connect every 'health', 'comms', 'water', and 'transport' node (target) to nearest 'energy' node (source)
+    # Rule 1: Connect every 'health', 'comms', 'water', and 'transport' node (target)
+    # to the nearest 'energy' substation (source) by physical street network distance
     power_dependent_nodes = health_nodes + comms_nodes + water_nodes + transport_nodes
     if energy_nodes and power_dependent_nodes:
-        energy_coords = np.array([[n["x"], n["y"]] for n in energy_nodes], dtype=float)
-        energy_tree = KDTree(energy_coords)
-
         for dep_node in power_dependent_nodes:
-            _, nearest_idx = energy_tree.query([dep_node["x"], dep_node["y"]], k=1)
-            nearest_energy_node = energy_nodes[int(nearest_idx)]
-            graph.add_edge(nearest_energy_node["name"], dep_node["name"])
+            matches = find_k_nearest_by_street_network(
+                street_graph,
+                undirected_street,
+                target_node=dep_node,
+                candidate_sources=energy_nodes,
+                k=1,
+            )
+            for nearest_energy, routing_dist, path_nodes in matches:
+                graph.add_edge(
+                    nearest_energy["name"],
+                    dep_node["name"],
+                    routing_distance=routing_dist,
+                    path_nodes=path_nodes,
+                )
 
     # Rule 2: Connect every 'health' node (target) to the nearest 'transport' node (source)
+    # via the shortest physical street route
     if transport_nodes and health_nodes:
-        transport_coords = np.array([[n["x"], n["y"]] for n in transport_nodes], dtype=float)
-        transport_tree = KDTree(transport_coords)
-
         for health_node in health_nodes:
-            _, nearest_idx = transport_tree.query([health_node["x"], health_node["y"]], k=1)
-            nearest_transport_node = transport_nodes[int(nearest_idx)]
-            graph.add_edge(nearest_transport_node["name"], health_node["name"])
+            matches = find_k_nearest_by_street_network(
+                street_graph,
+                undirected_street,
+                target_node=health_node,
+                candidate_sources=transport_nodes,
+                k=1,
+            )
+            for nearest_transport, routing_dist, path_nodes in matches:
+                graph.add_edge(
+                    nearest_transport["name"],
+                    health_node["name"],
+                    routing_distance=routing_dist,
+                    path_nodes=path_nodes,
+                )
 
-    # Rule 3: Create secondary edges between nearest 'comms' nodes
+    # Rule 3: Create secondary street-routed edges between nearest 'comms' nodes
     if len(comms_nodes) >= 2:
-        comms_coords = np.array([[n["x"], n["y"]] for n in comms_nodes], dtype=float)
-        comms_tree = KDTree(comms_coords)
-        k_neighbors = min(3, len(comms_nodes))
-
-        for idx, comms_node in enumerate(comms_nodes):
-            _, neighbor_indices = comms_tree.query(
-                [comms_node["x"], comms_node["y"]],
-                k=k_neighbors,
+        for comms_node in comms_nodes:
+            matches = find_k_nearest_by_street_network(
+                street_graph,
+                undirected_street,
+                target_node=comms_node,
+                candidate_sources=comms_nodes,
+                k=2,
             )
-            indices_list = (
-                [int(neighbor_indices)]
-                if np.isscalar(neighbor_indices)
-                else [int(i) for i in neighbor_indices]
-            )
-            for neighbor_idx in indices_list:
-                if neighbor_idx != idx:
-                    target_comms = comms_nodes[neighbor_idx]
-                    graph.add_edge(comms_node["name"], target_comms["name"])
+            for neighbor_comms, routing_dist, path_nodes in matches:
+                graph.add_edge(
+                    comms_node["name"],
+                    neighbor_comms["name"],
+                    routing_distance=routing_dist,
+                    path_nodes=path_nodes,
+                )
 
-    # Rule 4: Connect each 'energy' substation to its nearest neighboring 'energy' substations
+    # Rule 4: Connect each 'energy' substation to its 2 nearest neighboring 'energy' substations
+    # over the street network
     if len(energy_nodes) >= 2:
-        energy_coords = np.array([[n["x"], n["y"]] for n in energy_nodes], dtype=float)
-        energy_tree = KDTree(energy_coords)
-        k_grid = min(3, len(energy_nodes))
-
-        for idx, energy_node in enumerate(energy_nodes):
-            _, neighbor_indices = energy_tree.query(
-                [energy_node["x"], energy_node["y"]],
-                k=k_grid,
+        for energy_node in energy_nodes:
+            matches = find_k_nearest_by_street_network(
+                street_graph,
+                undirected_street,
+                target_node=energy_node,
+                candidate_sources=energy_nodes,
+                k=2,
             )
-            indices_list = (
-                [int(neighbor_indices)]
-                if np.isscalar(neighbor_indices)
-                else [int(i) for i in neighbor_indices]
-            )
-            for neighbor_idx in indices_list:
-                if neighbor_idx != idx:
-                    target_energy = energy_nodes[neighbor_idx]
-                    graph.add_edge(energy_node["name"], target_energy["name"])
+            for neighbor_energy, routing_dist, path_nodes in matches:
+                graph.add_edge(
+                    energy_node["name"],
+                    neighbor_energy["name"],
+                    routing_distance=routing_dist,
+                    path_nodes=path_nodes,
+                )
 
     return graph
+
+
+def build_full_miami_street_topology() -> nx.DiGraph:
+    """
+    Synchronous pipeline executed in a worker thread:
+      1. Downloads Miami drive street network (`ox.graph_from_place`).
+      2. Extracts critical OSM facilities (`ox.features_from_place`).
+      3. Snaps facilities to the closest street intersections (`ox.nearest_nodes`).
+      4. Computes shortest-path dependency edges (`nx.shortest_path_length` & `nx.shortest_path`).
+    """
+    street_graph = fetch_street_network()
+    osm_nodes = extract_osm_miami_nodes()
+    snapped_nodes = snap_facilities_to_street_grid(street_graph, osm_nodes)
+    return build_street_dependency_graph(street_graph, snapped_nodes)
 
 
 async def seed_miami_database() -> None:
     """
     Clears existing Node and Edge tables and persists all OSM-extracted
-    Miami nodes and KDTree dependency edges into PostgreSQL.
+    Miami nodes and physical street-routed dependency edges (with routing_distance
+    and path_nodes) into PostgreSQL.
     """
     await init_db()
 
@@ -261,11 +435,16 @@ async def seed_miami_database() -> None:
             text("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS y DOUBLE PRECISION DEFAULT 0.0;")
         )
         await conn.execute(
+            text("ALTER TABLE edges ADD COLUMN IF NOT EXISTS routing_distance DOUBLE PRECISION;")
+        )
+        await conn.execute(
+            text("ALTER TABLE edges ADD COLUMN IF NOT EXISTS path_nodes JSONB;")
+        )
+        await conn.execute(
             text("ALTER TABLE simulation_traces ADD COLUMN IF NOT EXISTS magnitude VARCHAR(100);")
         )
 
-    osm_nodes = await asyncio.to_thread(extract_osm_miami_nodes)
-    graph = build_spatial_dependency_graph(osm_nodes)
+    graph = await asyncio.to_thread(build_full_miami_street_topology)
 
     async with AsyncSessionLocal() as session:
         async with session.begin():
@@ -285,10 +464,16 @@ async def seed_miami_database() -> None:
 
             await session.flush()
 
-            for source_name, target_name in graph.edges():
+            for source_name, target_name, edge_attrs in graph.edges(data=True):
                 edge_obj = Edge(
                     source_node_id=node_records[str(source_name)].id,
                     target_node_id=node_records[str(target_name)].id,
+                    routing_distance=(
+                        float(edge_attrs["routing_distance"])
+                        if edge_attrs.get("routing_distance") is not None
+                        else None
+                    ),
+                    path_nodes=edge_attrs.get("path_nodes"),
                 )
                 session.add(edge_obj)
 
@@ -299,7 +484,7 @@ async def seed_miami_database() -> None:
 
         print(
             f"Successfully seeded {graph.number_of_nodes()} OSM Miami nodes {counts} and "
-            f"{graph.number_of_edges()} spatial KDTree edges into PostgreSQL."
+            f"{graph.number_of_edges()} street-routed dependency edges into PostgreSQL."
         )
 
     await engine.dispose()

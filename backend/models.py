@@ -61,7 +61,7 @@ class Node(Base):
 
 
 class Edge(Base):
-    """Represents a directed dependency edge (source_node -> target_node)."""
+    """Represents a directed dependency edge (source_node -> target_node) routed over the street grid."""
 
     __tablename__ = "edges"
     __table_args__ = (
@@ -80,6 +80,16 @@ class Edge(Base):
         ForeignKey("nodes.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
+    )
+    routing_distance: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        default=None,
+    )
+    path_nodes: Mapped[Optional[Any]] = mapped_column(
+        JSONB().with_variant(JSON(), "sqlite"),
+        nullable=True,
+        default=None,
     )
 
     source_node: Mapped["Node"] = relationship(
