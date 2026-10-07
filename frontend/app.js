@@ -225,14 +225,15 @@ function appendLog(text, type = 'system-msg') {
     consoleLog.scrollTop = consoleLog.scrollHeight;
 }
 
-// Tracks nodes saved by Self-Healing AI rerouting so the canvas renders a pulsing cyan glow
+// Tracks nodes saved by Self-Healing AI rerouting and the AI-selected meteorological epicenter
 const savedNodeIds = new Set();
+let impactNodeId = null;
 let pulseAnimFrame = null;
 
-function startSavedNodesPulse() {
+function startCanvasPulseLoop() {
     if (pulseAnimFrame) return;
     function tick() {
-        if (savedNodeIds.size === 0) {
+        if (savedNodeIds.size === 0 && !impactNodeId) {
             pulseAnimFrame = null;
             return;
         }
@@ -304,6 +305,7 @@ function resetGraphState() {
     if (!nodesDataSet || !edgesDataSet) return;
 
     savedNodeIds.clear();
+    impactNodeId = null;
 
     const nodeUpdates = topologyNodes.map(node => ({
         id: node.id,
@@ -339,50 +341,26 @@ function resetGraphState() {
 }
 
 /**
- * Updates the 'Epicenter Node' input field and highlights the selected node on the canvas.
+ * Sets the 'Disaster Trajectory' input field and highlights any matching quick-select chip.
  */
-function setEpicenterInput(nodeIdentifier, focusCanvas = false) {
-    const epicenterInput = document.getElementById('epicenter-node');
-    const dropdown = document.getElementById('epicenter-dropdown');
-    if (epicenterInput) {
-        epicenterInput.value = nodeIdentifier;
-    }
-    if (dropdown) {
-        dropdown.classList.add('hidden');
+function setTrajectoryInput(trajectoryText) {
+    const trajectoryInput = document.getElementById('disaster-trajectory');
+    if (trajectoryInput) {
+        trajectoryInput.value = trajectoryText;
     }
 
-    document.querySelectorAll('.chip').forEach(btn => {
-        btn.classList.toggle('active-chip', btn.dataset.node === nodeIdentifier);
+    document.querySelectorAll('#quick-trajectories .chip').forEach(btn => {
+        btn.classList.toggle('active-chip', btn.dataset.trajectory === trajectoryText);
     });
-
-    if (!isSimulating && nodesDataSet && nodesDataSet.get(nodeIdentifier)) {
-        resetGraphState();
-        const targetNode = topologyNodes.find(n => n.id === nodeIdentifier || n.name === nodeIdentifier);
-        nodesDataSet.update({
-            id: nodeIdentifier,
-            size: 24,
-            image: getNodeSvgIcon(targetNode ? targetNode.type : 'energy', '#00FF00')
-        });
-        if (network) {
-            network.selectNodes([nodeIdentifier]);
-            if (focusCanvas) {
-                network.focus(nodeIdentifier, {
-                    scale: 1.15,
-                    animation: { duration: 350, easingFunction: 'easeInOutQuad' }
-                });
-            }
-        }
-    }
 }
 
 /**
- * Task 1 & Task 2: Fetch topology from GET /api/v1/topology, map each node to its
+ * Fetch topology from GET /api/v1/topology, map each node to its
  * inline SVG icon with truncated 15-char labels and full native hover tooltips.
  */
 async function fetchAndRenderTopology() {
     const container = document.getElementById('network-canvas');
     const nodeCountBadge = document.getElementById('node-count-badge');
-    const epicenterInput = document.getElementById('epicenter-node');
 
     try {
         appendLog('Fetching Miami infrastructure topology from /api/v1/topology...', 'system-msg');
@@ -421,12 +399,11 @@ async function fetchAndRenderTopology() {
             nodeCountBadge.textContent = `${topologyNodes.length} nodes`;
         }
 
-        // Map backend nodes into vis.DataSet with shape: 'image', SVG data URIs, and 15-char truncated labels
         nodesDataSet = new vis.DataSet(
             topologyNodes.map(node => ({
                 id: node.id,
                 label: truncateLabel(node.name, 15),
-                title: node.name,
+                title: `${node.name} (${node.type}) [${node.rawX.toFixed(3)}, ${node.rawY.toFixed(3)}]`,
                 group: node.type,
                 shape: 'image',
                 image: getNodeSvgIcon(node.type),
@@ -443,7 +420,6 @@ async function fetchAndRenderTopology() {
             }))
         );
 
-        // Task 2: Global vis.Network options with dark-halo font stroke and native hover tooltips
         const options = {
             nodes: {
                 shape: 'image',
@@ -494,44 +470,51 @@ async function fetchAndRenderTopology() {
             }
         });
 
-        // Task 3: Subtle pulsing cyan glow ring around nodes 'saved' by the Self-Healing AI
+        // Render critical impact shockwave ring on epicenter & pulsing cyan glow on AI-saved nodes
         network.on('afterDrawing', function (ctx) {
-            if (savedNodeIds.size === 0) return;
+            if (savedNodeIds.size === 0 && !impactNodeId) return;
             const t = performance.now() / 1000;
-            const pulse = 0.5 + 0.5 * Math.sin(t * 4.2);
-            const positions = network.getPositions(Array.from(savedNodeIds));
+            const pulse = 0.5 + 0.5 * Math.sin(t * 4.5);
 
             ctx.save();
-            savedNodeIds.forEach(nodeId => {
-                const pos = positions[nodeId];
-                if (!pos) return;
-                const radius = 22 + pulse * 10;
-                const alpha = 0.25 + (1 - pulse) * 0.45;
 
-                ctx.beginPath();
-                ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
-                ctx.strokeStyle = `rgba(0, 255, 255, ${alpha.toFixed(2)})`;
-                ctx.lineWidth = 2.4;
-                ctx.shadowColor = '#00FFFF';
-                ctx.shadowBlur = 14;
-                ctx.stroke();
-            });
-            ctx.restore();
-        });
-
-        // Update 'Epicenter Node' when user clicks a node on the canvas
-        network.on('click', (params) => {
-            if (params.nodes && params.nodes.length > 0 && !isSimulating) {
-                const clickedNodeId = params.nodes[0];
-                const clickedNode = topologyNodes.find(n => String(n.id) === String(clickedNodeId));
-                const selectedIdentifier = clickedNode ? clickedNode.name : String(clickedNodeId);
-
-                setEpicenterInput(selectedIdentifier, false);
-                appendLog(
-                    `[NODE SELECTED] Epicenter Node set to '${selectedIdentifier}'.`,
-                    'system-msg'
-                );
+            // Critical shockwave ring around the AI-selected meteorological epicenter
+            if (impactNodeId) {
+                const impactPositions = network.getPositions([impactNodeId]);
+                const impactPos = impactPositions[impactNodeId];
+                if (impactPos) {
+                    const shockRadius = 24 + ((t * 28) % 26);
+                    const shockAlpha = Math.max(0.15, 0.85 - ((shockRadius - 24) / 26) * 0.7);
+                    ctx.beginPath();
+                    ctx.arc(impactPos.x, impactPos.y, shockRadius, 0, Math.PI * 2);
+                    ctx.strokeStyle = `rgba(255, 234, 0, ${shockAlpha.toFixed(2)})`;
+                    ctx.lineWidth = 2.8;
+                    ctx.shadowColor = '#f85149';
+                    ctx.shadowBlur = 18;
+                    ctx.stroke();
+                }
             }
+
+            // Subtle pulsing cyan glow ring around nodes 'saved' by the Self-Healing AI
+            if (savedNodeIds.size > 0) {
+                const positions = network.getPositions(Array.from(savedNodeIds));
+                savedNodeIds.forEach(nodeId => {
+                    const pos = positions[nodeId];
+                    if (!pos) return;
+                    const radius = 22 + pulse * 10;
+                    const alpha = 0.25 + (1 - pulse) * 0.45;
+
+                    ctx.beginPath();
+                    ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+                    ctx.strokeStyle = `rgba(0, 255, 255, ${alpha.toFixed(2)})`;
+                    ctx.lineWidth = 2.4;
+                    ctx.shadowColor = '#00FFFF';
+                    ctx.shadowBlur = 14;
+                    ctx.stroke();
+                });
+            }
+
+            ctx.restore();
         });
 
         network.fit({ animation: { duration: 400 } });
@@ -544,13 +527,6 @@ async function fetchAndRenderTopology() {
             survived: 0
         });
 
-        if (topologyNodes.length > 0 && epicenterInput) {
-            const currentVal = epicenterInput.value.trim();
-            const exists = topologyNodes.some(n => n.name === currentVal || n.id === currentVal);
-            const initialNode = exists ? currentVal : topologyNodes[0].name;
-            setEpicenterInput(initialNode, false);
-        }
-
         appendLog(
             `Rendered Miami map topology: ${topologyNodes.length} SVG nodes and ${rawEdges.length} directed edges.`,
             'system-msg'
@@ -561,45 +537,26 @@ async function fetchAndRenderTopology() {
 }
 
 /**
- * Trigger POST /api/v1/simulate and animate the cascade trace on the map.
+ * Trigger POST /api/v1/simulate with trajectory and animate the cascade trace on the map.
  */
 async function runSimulation() {
     if (isSimulating) return;
 
     const disasterSelect = document.getElementById('disaster-type');
     const magnitudeInput = document.getElementById('disaster-magnitude');
-    const epicenterInput = document.getElementById('epicenter-node');
+    const trajectoryInput = document.getElementById('disaster-trajectory');
     const runBtn = document.getElementById('run-btn');
     const resetBtn = document.getElementById('reset-btn');
     const loadingSpinner = document.getElementById('loading-spinner');
     const consoleLog = document.getElementById('console-log');
-    const dropdown = document.getElementById('epicenter-dropdown');
     const sidebar = document.getElementById('control-sidebar');
     const sidebarToggleBtn = document.getElementById('sidebar-toggle-btn');
 
     const disasterType = disasterSelect ? disasterSelect.value : 'Hurricane';
     const magnitude = (magnitudeInput && magnitudeInput.value.trim()) ? magnitudeInput.value.trim() : 'Category 5';
-    let epicenterNode = epicenterInput ? epicenterInput.value.trim() : '';
-
-    if (!epicenterNode) {
-        appendLog('ERROR: Epicenter Node cannot be empty.', 'trace-fail');
-        return;
-    }
-
-    const exactNode = topologyNodes.find(
-        n => n.name.toLowerCase() === epicenterNode.toLowerCase() ||
-             n.id.toLowerCase() === epicenterNode.toLowerCase()
-    );
-    const partialNode = topologyNodes.find(
-        n => n.name.toLowerCase().includes(epicenterNode.toLowerCase())
-    );
-    if (exactNode) {
-        epicenterNode = exactNode.name;
-        epicenterInput.value = epicenterNode;
-    } else if (partialNode) {
-        epicenterNode = partialNode.name;
-        epicenterInput.value = epicenterNode;
-    }
+    const trajectory = (trajectoryInput && trajectoryInput.value.trim())
+        ? trajectoryInput.value.trim()
+        : 'Coming from the Atlantic East coast';
 
     if (window.innerWidth <= 768 && sidebar && !sidebar.classList.contains('collapsed')) {
         sidebar.classList.add('collapsed');
@@ -609,7 +566,6 @@ async function runSimulation() {
     isSimulating = true;
     if (runBtn) runBtn.disabled = true;
     if (resetBtn) resetBtn.disabled = true;
-    if (dropdown) dropdown.classList.add('hidden');
     if (loadingSpinner) loadingSpinner.classList.remove('hidden');
 
     resetGraphState();
@@ -624,7 +580,7 @@ async function runSimulation() {
     });
 
     appendLog(
-        `[INIT] Simulating ${disasterType} (${magnitude}) at epicenter "${epicenterNode}"...`,
+        `[INIT] Simulating ${disasterType} (${magnitude}) | Trajectory: "${trajectory}"...`,
         'system-msg'
     );
 
@@ -635,7 +591,7 @@ async function runSimulation() {
             body: JSON.stringify({
                 disaster_type: disasterType,
                 magnitude: magnitude,
-                epicenter_node: epicenterNode
+                trajectory: trajectory
             })
         });
 
@@ -648,7 +604,7 @@ async function runSimulation() {
         if (loadingSpinner) loadingSpinner.classList.add('hidden');
 
         appendLog(
-            `[TRACE RECEIVED] Animating ${executionTrace.length} node evaluations...`,
+            `[TRACE RECEIVED] Animating meteorological impact + ${Math.max(0, executionTrace.length - 1)} cascade evaluations...`,
             'system-msg'
         );
 
@@ -665,7 +621,40 @@ async function runSimulation() {
 }
 
 /**
- * Sequentially animates each evaluated node, typewriter recovery command, and dynamic self-healing edge.
+ * Triggers a rapid critical flash sequence on the AI-selected epicenter node.
+ */
+async function flashImpactNode(nodeId, nodeType, shortName) {
+    if (!nodesDataSet || !nodesDataSet.get(nodeId)) return;
+
+    impactNodeId = nodeId;
+    startCanvasPulseLoop();
+
+    network.focus(nodeId, {
+        scale: 1.25,
+        animation: { duration: 450, easingFunction: 'easeInOutQuad' }
+    });
+
+    const flashColors = ['#ffea00', '#f85149', '#ffea00', '#f85149', '#ffea00', '#f85149'];
+    for (let f = 0; f < flashColors.length; f++) {
+        nodesDataSet.update({
+            id: nodeId,
+            label: `${shortName}\n[IMPACT ⚡]`,
+            size: f % 2 === 0 ? 27 : 22,
+            image: getNodeSvgIcon(nodeType, flashColors[f])
+        });
+        await new Promise(resolve => setTimeout(resolve, 160));
+    }
+
+    nodesDataSet.update({
+        id: nodeId,
+        label: `${shortName}\n[EPICENTER]`,
+        size: 24,
+        image: getNodeSvgIcon(nodeType, '#f85149')
+    });
+}
+
+/**
+ * Sequentially animates the initial 'impact' epicenter step followed by each BFS cascade step.
  */
 async function animateExecutionTrace(trace) {
     let failedCount = 0;
@@ -675,11 +664,35 @@ async function animateExecutionTrace(trace) {
     for (let i = 0; i < trace.length; i++) {
         const step = trace[i];
         const stepNum = i + 1;
-        const nodeName = step.child_node || step.node_name;
+        const nodeName = step.node || step.child_node || step.node_name;
         const matchingNode = topologyNodes.find(n => n.name === nodeName || n.id === nodeName);
         const nodeId = matchingNode ? matchingNode.id : nodeName;
         const nodeType = matchingNode ? matchingNode.type : (step.node_type || 'energy');
         const shortName = truncateLabel(nodeName, 15);
+
+        // Task 3: Handle the initial meteorological 'impact' step with a critical flash
+        if (step.step === 'impact') {
+            failedCount++;
+            evaluatedSet.add(nodeId);
+
+            appendLog(
+                `[METEOROLOGICAL IMPACT] AI Epicenter Selected: "${nodeName}" — ${step.reasoning}`,
+                'trace-impact'
+            );
+
+            await flashImpactNode(nodeId, nodeType, shortName);
+
+            updateTelemetry({
+                state: 'RUNNING',
+                evaluated: stepNum,
+                total: trace.length,
+                failed: failedCount,
+                survived: survivedCount
+            });
+
+            await new Promise(resolve => setTimeout(resolve, 650));
+            continue;
+        }
 
         if (nodesDataSet && nodesDataSet.get(nodeId)) {
             nodesDataSet.update({
@@ -720,7 +733,10 @@ async function animateExecutionTrace(trace) {
         if (edgesDataSet) {
             const matchingEdges = edgesDataSet.get().filter(edge => {
                 if (step.parent_node) {
-                    return edge.from === step.parent_node && edge.to === nodeId;
+                    return (
+                        (edge.from === step.parent_node && edge.to === nodeId) ||
+                        (edge.from === nodeId && edge.to === step.parent_node)
+                    );
                 }
                 return edge.to === nodeId && evaluatedSet.has(edge.from);
             });
@@ -755,12 +771,12 @@ async function animateExecutionTrace(trace) {
             logClass
         );
 
-        // Task 2: Terminal Execution Effect with character-by-character typewriter animation
+        // Terminal Execution Effect with character-by-character typewriter animation
         if (step.recovery_command) {
             await typewriterLog(step.recovery_command, 20);
         }
 
-        // Task 1: Dynamic Edge Injection & Task 3: Visual Polish for 'saved' nodes
+        // Dynamic Edge Injection & Visual Polish for 'saved' nodes
         if (step.new_edge && step.new_edge.source && step.new_edge.target && edgesDataSet) {
             const healEdgeId = `heal_edge_${stepNum}_${step.new_edge.source}_${step.new_edge.target}`;
             if (!edgesDataSet.get(healEdgeId)) {
@@ -775,9 +791,8 @@ async function animateExecutionTrace(trace) {
                 });
             }
 
-            // Mark node as saved by AI rerouting with pulsing cyan glow
             savedNodeIds.add(nodeId);
-            startSavedNodesPulse();
+            startCanvasPulseLoop();
 
             if (nodesDataSet && nodesDataSet.get(nodeId)) {
                 nodesDataSet.update({
@@ -793,7 +808,6 @@ async function animateExecutionTrace(trace) {
                 'trace-saved node-saved'
             );
 
-            // Pause briefly to let the user see the new lifeline connection form on the map
             await new Promise(resolve => setTimeout(resolve, 900));
         } else if (step.recovery_command) {
             appendLog('Node saved by rerouting.', 'trace-saved node-saved');
@@ -822,59 +836,6 @@ async function animateExecutionTrace(trace) {
 }
 
 /**
- * Searchable dropdown helper for filtering topology nodes in the sidebar.
- */
-function renderEpicenterDropdown(filterText = '') {
-    const dropdown = document.getElementById('epicenter-dropdown');
-    if (!dropdown) return;
-
-    const query = filterText.trim().toLowerCase();
-    const matches = topologyNodes.filter(
-        n => n.name.toLowerCase().includes(query) || n.type.toLowerCase().includes(query)
-    );
-
-    dropdown.innerHTML = '';
-    activeDropdownIndex = -1;
-
-    if (matches.length === 0) {
-        const emptyEl = document.createElement('div');
-        emptyEl.className = 'dropdown-empty';
-        emptyEl.textContent = `No infrastructure node matching "${filterText}"`;
-        dropdown.appendChild(emptyEl);
-        dropdown.classList.remove('hidden');
-        return;
-    }
-
-    matches.forEach((node, idx) => {
-        const item = document.createElement('div');
-        item.className = 'dropdown-item';
-        item.dataset.nodeId = node.name;
-        item.dataset.index = String(idx);
-
-        const nameEl = document.createElement('div');
-        nameEl.className = 'dropdown-node-name';
-        nameEl.textContent = node.name;
-
-        const typeEl = document.createElement('div');
-        typeEl.className = 'dropdown-node-type';
-        typeEl.textContent = `Type: ${node.type}`;
-
-        item.appendChild(nameEl);
-        item.appendChild(typeEl);
-
-        item.addEventListener('mousedown', (e) => {
-            e.preventDefault();
-            setEpicenterInput(node.name, true);
-            appendLog(`[SELECT] Epicenter Node set to '${node.name}' (${node.type}).`, 'system-msg');
-        });
-
-        dropdown.appendChild(item);
-    });
-
-    dropdown.classList.remove('hidden');
-}
-
-/**
  * Initialize DOM event listeners, mobile drawer toggles, and topology on DOMContentLoaded.
  */
 document.addEventListener('DOMContentLoaded', () => {
@@ -882,10 +843,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const runBtn = document.getElementById('run-btn');
     const resetBtn = document.getElementById('reset-btn');
-    const epicenterInput = document.getElementById('epicenter-node');
+    const trajectoryInput = document.getElementById('disaster-trajectory');
     const clearSearchBtn = document.getElementById('clear-search-btn');
-    const dropdown = document.getElementById('epicenter-dropdown');
-    const quickChipsContainer = document.getElementById('quick-epicenters');
+    const quickTrajectoriesContainer = document.getElementById('quick-trajectories');
 
     const sidebar = document.getElementById('control-sidebar');
     const sidebarToggleBtn = document.getElementById('sidebar-toggle-btn');
@@ -925,40 +885,32 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    if (epicenterInput) {
-        epicenterInput.addEventListener('focus', () => renderEpicenterDropdown(epicenterInput.value));
-        epicenterInput.addEventListener('input', (e) => renderEpicenterDropdown(e.target.value));
-        epicenterInput.addEventListener('keydown', (e) => {
+    if (trajectoryInput) {
+        trajectoryInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 e.preventDefault();
-                if (dropdown) dropdown.classList.add('hidden');
                 runSimulation();
-            } else if (e.key === 'Escape' && dropdown) {
-                dropdown.classList.add('hidden');
             }
         });
-    }
-
-    if (clearSearchBtn && epicenterInput) {
-        clearSearchBtn.addEventListener('click', () => {
-            epicenterInput.value = '';
-            epicenterInput.focus();
-            renderEpicenterDropdown('');
+        trajectoryInput.addEventListener('input', (e) => {
+            setTrajectoryInput(e.target.value);
         });
     }
 
-    if (quickChipsContainer) {
-        quickChipsContainer.addEventListener('click', (e) => {
+    if (clearSearchBtn && trajectoryInput) {
+        clearSearchBtn.addEventListener('click', () => {
+            setTrajectoryInput('');
+            trajectoryInput.focus();
+        });
+    }
+
+    if (quickTrajectoriesContainer) {
+        quickTrajectoriesContainer.addEventListener('click', (e) => {
             const chip = e.target.closest('.chip');
             if (!chip || isSimulating) return;
-            setEpicenterInput(chip.dataset.node, true);
-            appendLog(`[QUICK SELECT] Epicenter Node set to '${chip.dataset.node}'.`, 'system-msg');
+            const traj = chip.dataset.trajectory || '';
+            setTrajectoryInput(traj);
+            appendLog(`[TRAJECTORY SET] "${traj}"`, 'system-msg');
         });
     }
-
-    document.addEventListener('click', (e) => {
-        if (dropdown && !e.target.closest('.search-group')) {
-            dropdown.classList.add('hidden');
-        }
-    });
 });
