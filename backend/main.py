@@ -174,6 +174,7 @@ async def simulate_cascade(
 
     bfs_queue: deque[str] = deque([request.epicenter_node])
     visited: set[str] = {request.epicenter_node}
+    failed_nodes: set[str] = {request.epicenter_node}
 
     epicenter_type = str(graph.nodes[request.epicenter_node].get("type", "unknown"))
     execution_trace: list[dict[str, Any]] = [
@@ -188,18 +189,23 @@ async def simulate_cascade(
                 f"Direct epicenter hit from {request.disaster_type} ({magnitude}) "
                 f"caused immediate failure at {request.epicenter_node}."
             ),
+            "recovery_command": None,
+            "new_edge": None,
         }
     ]
 
     while bfs_queue:
         parent_name = bfs_queue.popleft()
 
-        for child_name in graph.successors(parent_name):
+        for child_name in list(graph.successors(parent_name)):
             if child_name in visited:
                 continue
             visited.add(child_name)
 
             child_type = str(graph.nodes[child_name].get("type", "unknown"))
+            available_nodes = [
+                str(n) for n in graph.nodes if n not in failed_nodes and n != child_name
+            ]
 
             try:
                 evaluation = await evaluate_node_failure(
@@ -208,12 +214,48 @@ async def simulate_cascade(
                     parent_name=parent_name,
                     disaster_type=request.disaster_type,
                     magnitude=magnitude,
+                    available_nodes=available_nodes,
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=500, detail=str(exc)) from exc
 
             child_status = bool(evaluation["status"])
             reasoning = str(evaluation["reasoning"])
+            recovery_command: str | None = evaluation.get("recovery_command")
+            raw_new_edge = evaluation.get("new_edge")
+            validated_new_edge: dict[str, str] | None = None
+
+            if child_status is False:
+                failed_nodes.add(child_name)
+
+            # Validate and dynamically mutate the NetworkX graph if a valid self-healing edge is returned
+            if isinstance(raw_new_edge, dict):
+                raw_source = raw_new_edge.get("source")
+                target_node = str(raw_new_edge.get("target") or child_name)
+                resolved_source: str | None = None
+
+                if isinstance(raw_source, str):
+                    if raw_source in graph:
+                        resolved_source = raw_source
+                    else:
+                        norm_raw = raw_source.strip().lower().replace("_", " ").replace("-", " ")
+                        for candidate in graph.nodes:
+                            norm_cand = str(candidate).strip().lower().replace("_", " ").replace("-", " ")
+                            if norm_cand == norm_raw or norm_raw in norm_cand or norm_cand in norm_raw:
+                                resolved_source = str(candidate)
+                                break
+
+                if (
+                    resolved_source is not None
+                    and resolved_source in graph
+                    and resolved_source not in failed_nodes
+                    and resolved_source != target_node
+                ):
+                    graph.add_edge(resolved_source, target_node)
+                    validated_new_edge = {
+                        "source": resolved_source,
+                        "target": target_node,
+                    }
 
             execution_trace.append(
                 {
@@ -224,6 +266,8 @@ async def simulate_cascade(
                     "magnitude": magnitude,
                     "status": child_status,
                     "reasoning": reasoning,
+                    "recovery_command": recovery_command if validated_new_edge or recovery_command else None,
+                    "new_edge": validated_new_edge,
                 }
             )
 
