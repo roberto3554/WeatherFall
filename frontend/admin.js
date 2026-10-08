@@ -104,8 +104,17 @@ function clearSession() {
 }
 
 let isRedirectingToLogin = false;
+let activeSessionCheckPromise = null;
 
-async function redirectToLogin() {
+function redirectToLogin() {
+    if (isRedirectingToLogin) return;
+    isRedirectingToLogin = true;
+    clearSession();
+    const next = encodeURIComponent(window.location.pathname || '/admin');
+    window.location.replace(`/login?next=${next}`);
+}
+
+async function signOutAdmin() {
     if (isRedirectingToLogin) return;
     isRedirectingToLogin = true;
     const token = getToken();
@@ -119,41 +128,59 @@ async function redirectToLogin() {
     } catch (_) {
         // Proceed with redirect even if network is offline
     }
-    const next = encodeURIComponent(window.location.pathname || '/admin');
-    window.location.replace(`/login?next=${next}`);
+    window.location.replace('/login');
 }
 
 /**
  * Verifies the active session against GET /api/v1/auth/me on the server.
- * Ensures the token/cookie is valid, unrevoked, and belongs to an active administrator.
+ * Deduplicates concurrent checks and ensures the user is an active administrator.
  */
 async function verifyAdminSession() {
-    try {
-        const resp = await fetch('/api/v1/auth/me', {
-            method: 'GET',
-            credentials: 'same-origin',
-            headers: authHeaders(),
-        });
-        if (!resp.ok) {
-            await redirectToLogin();
-            return false;
-        }
-        const user = await resp.json();
-        if (!user || !user.is_admin || !user.is_active) {
-            await redirectToLogin();
-            return false;
-        }
-        localStorage.setItem(USER_KEY, user.username);
-        localStorage.setItem(ADMIN_KEY, 'true');
-        const userEl = document.getElementById('admin-user');
-        if (userEl) {
-            userEl.textContent = `${user.username}@admin`;
-        }
-        return true;
-    } catch (_) {
-        await redirectToLogin();
-        return false;
+    if (activeSessionCheckPromise) {
+        return activeSessionCheckPromise;
     }
+
+    activeSessionCheckPromise = (async () => {
+        const token = getToken();
+        if (!token) {
+            redirectToLogin();
+            return false;
+        }
+
+        try {
+            const resp = await fetch('/api/v1/auth/me', {
+                method: 'GET',
+                credentials: 'same-origin',
+                headers: authHeaders(),
+            });
+            if (resp.status === 401 || resp.status === 403) {
+                redirectToLogin();
+                return false;
+            }
+            if (!resp.ok) {
+                return false;
+            }
+            const user = await resp.json();
+            if (!user || !user.is_admin || !user.is_active) {
+                redirectToLogin();
+                return false;
+            }
+            localStorage.setItem(USER_KEY, user.username);
+            localStorage.setItem(ADMIN_KEY, 'true');
+            const userEl = document.getElementById('admin-user');
+            if (userEl) {
+                userEl.textContent = `${user.username}@admin`;
+            }
+            return true;
+        } catch (_) {
+            // Do not wipe session or revoke token if a fetch was aborted during navigation
+            return Boolean(getToken() && localStorage.getItem(ADMIN_KEY) === 'true');
+        } finally {
+            activeSessionCheckPromise = null;
+        }
+    })();
+
+    return activeSessionCheckPromise;
 }
 
 function escapeHtml(value) {
@@ -192,7 +219,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const logoutBtn = document.getElementById('admin-logout-btn');
     if (logoutBtn) {
         logoutBtn.addEventListener('click', async () => {
-            await redirectToLogin();
+            await signOutAdmin();
         });
     }
 
