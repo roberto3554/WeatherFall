@@ -579,22 +579,21 @@ function formatSimulationClock(hoursFloat) {
 function ensureGlobalClockElement() {
     let clockEl = document.getElementById('global-sim-clock');
     if (!clockEl) {
-        const sidebar = document.getElementById('control-sidebar');
-        const sidebarHeader = sidebar ? sidebar.querySelector('.sidebar-header') : null;
-        if (sidebar && sidebarHeader) {
+        const cluster = document.querySelector('.telemetry-resource-cluster') || document.querySelector('.timeline-telemetry');
+        if (cluster) {
             const bar = document.createElement('div');
-            bar.className = 'global-sim-clock-bar';
+            bar.className = 'global-sim-clock-bar tt-pill tt-pill-clock';
             bar.id = 'global-sim-clock-bar';
             bar.setAttribute('role', 'timer');
             bar.setAttribute('aria-live', 'polite');
             bar.innerHTML = `
                 <div class="sim-clock-label-group">
                     <span class="sim-clock-indicator" id="sim-clock-indicator"></span>
-                    <span class="sim-clock-label">Global Simulation Clock</span>
+                    <span class="sim-clock-label tt-label">Global Simulation Clock</span>
                 </div>
-                <span class="sim-clock-value" id="global-sim-clock">T+00:00</span>
+                <span class="sim-clock-value t-value val-clock" id="global-sim-clock">T+00:00</span>
             `;
-            sidebarHeader.insertAdjacentElement('afterend', bar);
+            cluster.insertAdjacentElement('afterbegin', bar);
             clockEl = document.getElementById('global-sim-clock');
         }
     }
@@ -645,7 +644,8 @@ const FEED_SVGS = {
     warning: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="16" height="10" rx="2" ry="2"/><line x1="22" y1="11" x2="22" y2="13"/><line x1="6" y1="11" x2="6" y2="13"/><line x1="10" y1="11" x2="10" y2="13"/></svg>`,
     fail: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`,
     survive: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`,
-    shield: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>`
+    shield: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>`,
+    committee: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="3"/><circle cx="5" cy="19" r="3"/><circle cx="19" cy="19" r="3"/><line x1="10.5" y1="7.5" x2="6.5" y2="16.5"/><line x1="13.5" y1="7.5" x2="17.5" y2="16.5"/><line x1="8" y1="19" x2="16" y2="19"/></svg>`
 };
 
 function updateFeedCounter() {
@@ -663,6 +663,7 @@ function appendFeedCard({
     pillText = '',
     pillClass = '',
     description = '',
+    recoveryCommand = '',
     pdfSummary = '',
     simTimeText = '',
     sviScore = null,
@@ -678,7 +679,8 @@ function appendFeedCard({
     const card = document.createElement('div');
     card.className = `feed-card feed-card-${variant} log-line`;
     const sviPdfTag = sviMeta ? ` [${sviMeta.badgeText}${popVal > 0 ? ` | Pop: ${popVal.toLocaleString()}` : ''}]` : '';
-    card.dataset.pdfSummary = pdfSummary || `[${timestamp}] ${title}${pillText ? ` [${pillText}]` : ''}${sviPdfTag}: ${description}`;
+    const cmdPdfTag = recoveryCommand ? ` | CMD: ${recoveryCommand}` : '';
+    card.dataset.pdfSummary = pdfSummary || `[${timestamp}] ${title}${pillText ? ` [${pillText}]` : ''}${sviPdfTag}: ${description}${cmdPdfTag}`;
 
     const iconDiv = document.createElement('div');
     iconDiv.className = `feed-card-icon ${iconClass}`;
@@ -736,6 +738,13 @@ function appendFeedCard({
     descP.textContent = description;
     bodyDiv.appendChild(descP);
 
+    if (recoveryCommand) {
+        const cmdBox = document.createElement('div');
+        cmdBox.className = 'feed-recovery-cmd-line';
+        cmdBox.textContent = `> ${recoveryCommand}`;
+        bodyDiv.appendChild(cmdBox);
+    }
+
     card.appendChild(iconDiv);
     card.appendChild(bodyDiv);
     consoleLog.appendChild(card);
@@ -743,6 +752,236 @@ function appendFeedCard({
 
     feedEventCount++;
     updateFeedCounter();
+}
+
+/**
+ * Normalizes `step.agent_debate_log` (array, object, or string) into structured sub-agent
+ * proposals (`Engineering_Agent`, `Social_Agent`, `Finance_Agent`) and `Supervisor_Agent` verdict.
+ */
+function normalizeAgentDebateLog(rawDebateLog) {
+    if (!rawDebateLog) return null;
+
+    let entries = [];
+    if (Array.isArray(rawDebateLog)) {
+        entries = rawDebateLog.filter(Boolean);
+    } else if (typeof rawDebateLog === 'object') {
+        entries = Object.entries(rawDebateLog).map(([key, val]) => {
+            if (val && typeof val === 'object') {
+                return { agent: val.agent || key, ...val };
+            }
+            return { agent: key, proposal: String(val ?? '') };
+        });
+    } else if (typeof rawDebateLog === 'string' && rawDebateLog.trim()) {
+        entries = [{ agent: 'Supervisor_Agent', proposal: rawDebateLog.trim(), negotiation_summary: rawDebateLog.trim() }];
+    }
+
+    if (!entries.length) return null;
+
+    const subAgents = [];
+    let supervisorEntry = null;
+
+    entries.forEach((entry) => {
+        const agentName = String(entry.agent || 'Agent');
+        if (agentName.toLowerCase().includes('supervisor')) {
+            supervisorEntry = entry;
+        } else {
+            subAgents.push(entry);
+        }
+    });
+
+    return { subAgents, supervisorEntry, allEntries: entries };
+}
+
+/**
+ * Task 3: Renders the Multi-Agent Crisis Committee negotiation (`agent_debate_log`)
+ * briefly in real-time before revealing the final `recovery_command`, simulating a
+ * live crisis room deliberation between Engineering_Agent, Social_Agent, Finance_Agent,
+ * and Supervisor_Agent.
+ */
+async function renderCrisisCommitteeDeliberation({
+    step,
+    nodeName,
+    clockStr,
+    stepSvi,
+    stepPop,
+    stepNum,
+    totalSteps
+}) {
+    const consoleLog = document.getElementById('console-log');
+    if (!consoleLog) return;
+
+    const normalized = normalizeAgentDebateLog(step.agent_debate_log);
+    if (!normalized) return;
+
+    const { subAgents, supervisorEntry } = normalized;
+    const sviMeta = getSviBadgeMeta(stepSvi);
+    const popVal = stepPop !== null && stepPop !== undefined ? Number(stepPop) : 0;
+
+    const card = document.createElement('div');
+    card.className = 'feed-card feed-card-committee log-line';
+
+    const iconDiv = document.createElement('div');
+    iconDiv.className = 'feed-card-icon committee-icon';
+    iconDiv.innerHTML = FEED_SVGS.committee;
+
+    const bodyDiv = document.createElement('div');
+    bodyDiv.className = 'feed-card-body';
+
+    const headerDiv = document.createElement('div');
+    headerDiv.className = 'feed-card-header';
+
+    const titleGroup = document.createElement('div');
+    titleGroup.className = 'feed-card-title-group';
+
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'feed-card-title';
+    titleSpan.textContent = `${nodeName} — Crisis Committee Deliberation`;
+    titleGroup.appendChild(titleSpan);
+
+    const statusPill = document.createElement('span');
+    statusPill.className = 'feed-status-pill pill-committee-deliberating';
+    statusPill.textContent = '⚡ DELIBERATING…';
+    titleGroup.appendChild(statusPill);
+
+    if (sviMeta) {
+        const sviSpan = document.createElement('span');
+        sviSpan.className = `feed-svi-pill ${sviMeta.pillClass}`;
+        sviSpan.textContent = sviMeta.badgeText;
+        titleGroup.appendChild(sviSpan);
+
+        if (popVal > 0) {
+            const popSpan = document.createElement('span');
+            popSpan.className = 'feed-pop-pill';
+            popSpan.textContent = `Pop: ${popVal.toLocaleString()}`;
+            titleGroup.appendChild(popSpan);
+        }
+    }
+
+    const timeSpan = document.createElement('span');
+    timeSpan.className = 'feed-card-time';
+    timeSpan.textContent = clockStr;
+
+    headerDiv.appendChild(titleGroup);
+    headerDiv.appendChild(timeSpan);
+    bodyDiv.appendChild(headerDiv);
+
+    const proposalsContainer = document.createElement('div');
+    proposalsContainer.className = 'crisis-committee-grid';
+    bodyDiv.appendChild(proposalsContainer);
+
+    card.appendChild(iconDiv);
+    card.appendChild(bodyDiv);
+    consoleLog.appendChild(card);
+    consoleLog.scrollTop = consoleLog.scrollHeight;
+
+    feedEventCount++;
+    updateFeedCounter();
+
+    const agentStyleMeta = (agentName) => {
+        const lower = String(agentName).toLowerCase();
+        if (lower.includes('engineering')) {
+            return { badge: 'ENGINEERING_AGENT', tag: 'Shortest Path & Stability', cls: 'agent-eng' };
+        }
+        if (lower.includes('social')) {
+            return { badge: 'SOCIAL_AGENT', tag: 'SVI & Population Equity', cls: 'agent-soc' };
+        }
+        if (lower.includes('finance')) {
+            return { badge: 'FINANCE_AGENT', tag: 'Budget & Crew Limits', cls: 'agent-fin' };
+        }
+        return { badge: String(agentName).toUpperCase(), tag: 'Sub-Agent Proposal', cls: 'agent-eng' };
+    };
+
+    // 1. Staggered reveal of Engineering_Agent, Social_Agent, and Finance_Agent proposals
+    for (let idx = 0; idx < subAgents.length; idx++) {
+        const prop = subAgents[idx];
+        const meta = agentStyleMeta(prop.agent);
+        const edgeObj = prop.new_edge && typeof prop.new_edge === 'object' ? prop.new_edge : null;
+        const costNum = prop.cost !== undefined && prop.cost !== null
+            ? Number(prop.cost)
+            : (edgeObj && edgeObj.cost ? Number(edgeObj.cost) : 0);
+        const routeChipText = edgeObj && edgeObj.source
+            ? `${edgeObj.source} → ${edgeObj.target || nodeName} ($${Math.round(costNum).toLocaleString()})`
+            : (prop.status === false ? `Hold / Defer${costNum > 0 ? ` ($${Math.round(costNum).toLocaleString()} flagged)` : ''}` : 'Evaluate Route');
+
+        const row = document.createElement('div');
+        row.className = `crisis-agent-row ${meta.cls}`;
+
+        const rowHeader = document.createElement('div');
+        rowHeader.className = 'crisis-agent-row-header';
+
+        const badgeSpan = document.createElement('span');
+        badgeSpan.className = `crisis-agent-badge ${meta.cls}-badge`;
+        badgeSpan.textContent = meta.badge;
+
+        const roleSpan = document.createElement('span');
+        roleSpan.className = 'crisis-agent-role';
+        roleSpan.textContent = prop.role || meta.tag;
+
+        const routeSpan = document.createElement('span');
+        routeSpan.className = `crisis-agent-route ${prop.status === false ? 'route-oppose' : 'route-approve'}`;
+        routeSpan.textContent = routeChipText;
+
+        rowHeader.appendChild(badgeSpan);
+        rowHeader.appendChild(roleSpan);
+        rowHeader.appendChild(routeSpan);
+
+        const propText = document.createElement('p');
+        propText.className = 'crisis-agent-proposal';
+        propText.textContent = String(prop.proposal || prop.reasoning || '');
+
+        row.appendChild(rowHeader);
+        row.appendChild(propText);
+        proposalsContainer.appendChild(row);
+        consoleLog.scrollTop = consoleLog.scrollHeight;
+
+        await new Promise(resolve => setTimeout(resolve, 140));
+    }
+
+    // 2. Brief pause before Supervisor_Agent issues binding negotiation summary
+    await new Promise(resolve => setTimeout(resolve, 210));
+
+    const verdictSummary = supervisorEntry
+        ? String(supervisorEntry.negotiation_summary || supervisorEntry.proposal || '')
+        : String(step.negotiation_summary || 'Balanced Engineering, Social, and Finance proposals for optimal dispatch.');
+    const approved = supervisorEntry ? Boolean(supervisorEntry.status) : Boolean(step.recovery_command || step.new_edge);
+
+    const verdictBox = document.createElement('div');
+    verdictBox.className = `crisis-supervisor-verdict ${approved ? 'verdict-approved' : 'verdict-deferred'}`;
+
+    const verdictHeader = document.createElement('div');
+    verdictHeader.className = 'crisis-supervisor-header';
+    verdictHeader.innerHTML = `<span class="crisis-supervisor-badge">SUPERVISOR_AGENT • BINDING VERDICT</span>`;
+
+    const verdictText = document.createElement('p');
+    verdictText.className = 'crisis-supervisor-text';
+    verdictText.textContent = `"${verdictSummary}"`;
+
+    verdictBox.appendChild(verdictHeader);
+    verdictBox.appendChild(verdictText);
+    bodyDiv.appendChild(verdictBox);
+
+    statusPill.className = `feed-status-pill ${approved ? 'pill-committee-approved' : 'pill-committee-deferred'}`;
+    statusPill.textContent = approved ? '✓ CONSENSUS: ROUTE APPROVED' : '✕ VERDICT: DEFERRED / ABANDONED';
+    consoleLog.scrollTop = consoleLog.scrollHeight;
+
+    // 3. Brief pause after negotiation summary before revealing the final recovery_command
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    const finalCmd = step.recovery_command
+        || (approved && step.new_edge && step.new_edge.source
+            ? `DISPATCH ${step.new_edge.crews_used || 1} CREW(S) AT ${clockStr}: REROUTE ${step.new_edge.source} -> ${nodeName}`
+            : `NO RECOVERY DISPATCHED FOR ${nodeName} (BATTERY DEADLINE OR RESOURCE CAP)`);
+
+    const cmdBanner = document.createElement('div');
+    cmdBanner.className = `crisis-recovery-command-box ${approved ? 'cmd-approved' : 'cmd-abandoned'}`;
+    cmdBanner.textContent = `> FINAL RECOVERY COMMAND: ${finalCmd}`;
+    bodyDiv.appendChild(cmdBanner);
+    consoleLog.scrollTop = consoleLog.scrollHeight;
+
+    const subPdfParts = subAgents.map(a => `${a.agent}: ${a.proposal || ''}`).join(' | ');
+    card.dataset.pdfSummary = `[${clockStr}] [STEP ${stepNum}/${totalSteps}] [CRISIS COMMITTEE DELIBERATION — ${nodeName}] ${subPdfParts} || Supervisor_Agent Verdict: "${verdictSummary}" || Final Command: ${finalCmd}`;
+
+    await new Promise(resolve => setTimeout(resolve, 220));
 }
 
 function appendSystemCard(title, description, simTimeText = '') {
@@ -1276,6 +1515,7 @@ async function animateExecutionTrace(trace) {
     const impactedNodesSet = new Set();
     const offlineNodesSet = new Set();
     const criticalBatteryNodesSet = new Set();
+    const deliberatedNodesSet = new Set();
 
     setGlobalSimulationClock(0.0, true);
 
@@ -1402,7 +1642,10 @@ async function animateExecutionTrace(trace) {
             const critRemStr = (step.remaining_budget !== undefined && step.remaining_crews !== undefined)
                 ? ` [Remaining Budget: $${Math.round(Number(step.remaining_budget)).toLocaleString()} | Crews Left: ${step.remaining_crews}]`
                 : '';
-            const critDesc = `[${clockStr}] Upstream lifeline from ${step.parent_node || 'Epicenter'} severed. Entered CRITICAL_BATTERY (${backupHrs}h UPS reserve; deadline ${deadlineStr}). ${step.reasoning || ''}${critRemStr}`.trim();
+            const hasDebate = Array.isArray(step.agent_debate_log) && step.agent_debate_log.length > 0;
+            const critDesc = hasDebate
+                ? `[${clockStr}] Upstream lifeline from ${step.parent_node || 'Epicenter'} severed. Entered CRITICAL_BATTERY (${backupHrs}h UPS reserve; deadline ${deadlineStr}). Convening Multi-Agent Crisis Committee...${critRemStr}`.trim()
+                : `[${clockStr}] Upstream lifeline from ${step.parent_node || 'Epicenter'} severed. Entered CRITICAL_BATTERY (${backupHrs}h UPS reserve; deadline ${deadlineStr}). ${step.reasoning || ''}${critRemStr}`.trim();
 
             appendFeedCard({
                 variant: 'warning',
@@ -1418,7 +1661,21 @@ async function animateExecutionTrace(trace) {
                 pdfSummary: `[${clockStr}] [STEP ${stepNum}/${trace.length}] [CRITICAL_BATTERY] ${nodeName}: ${critDesc}`
             });
 
-            await new Promise(resolve => setTimeout(resolve, 480));
+            if (hasDebate) {
+                await new Promise(resolve => setTimeout(resolve, 220));
+                await renderCrisisCommitteeDeliberation({
+                    step,
+                    stepNum,
+                    totalSteps: trace.length,
+                    nodeName,
+                    clockStr,
+                    sviScore: stepSvi,
+                    populationServed: stepPop
+                });
+                deliberatedNodesSet.add(nodeId);
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 360));
             continue;
         }
 
@@ -1434,6 +1691,19 @@ async function animateExecutionTrace(trace) {
                     animate: true,
                     duration: 0.32
                 });
+            }
+
+            if (!deliberatedNodesSet.has(nodeId) && Array.isArray(step.agent_debate_log) && step.agent_debate_log.length > 0) {
+                await renderCrisisCommitteeDeliberation({
+                    step,
+                    stepNum,
+                    totalSteps: trace.length,
+                    nodeName,
+                    clockStr,
+                    sviScore: stepSvi,
+                    populationServed: stepPop
+                });
+                deliberatedNodesSet.add(nodeId);
             }
 
             const estCost = step.new_edge ? (step.new_edge.cost ?? step.new_edge.estimated_cost ?? step.estimated_cost) : step.estimated_cost;
@@ -1514,6 +1784,7 @@ async function animateExecutionTrace(trace) {
                 pillText: `ONLINE • ${routeText}`,
                 pillClass: 'pill-recovery',
                 description: rerouteSummary,
+                recoveryCommand: step.recovery_command || `EXECUTED: REROUTE ${routeText}`,
                 simTimeText: clockStr,
                 sviScore: stepSvi,
                 populationServed: stepPop,
@@ -1528,6 +1799,19 @@ async function animateExecutionTrace(trace) {
         criticalBatteryNodesSet.delete(nodeId);
         impactedNodesSet.add(nodeId);
         offlineNodesSet.add(nodeId);
+
+        if (!deliberatedNodesSet.has(nodeId) && Array.isArray(step.agent_debate_log) && step.agent_debate_log.length > 0) {
+            await renderCrisisCommitteeDeliberation({
+                step,
+                stepNum,
+                totalSteps: trace.length,
+                nodeName,
+                clockStr,
+                sviScore: stepSvi,
+                populationServed: stepPop
+            });
+            deliberatedNodesSet.add(nodeId);
+        }
 
         topologyEdges.forEach(edge => {
             const matches = step.parent_node
@@ -2410,11 +2694,235 @@ function initHazardAndMagnitudeSelectors() {
     populateMagnitudeOptions(disasterSelect.value, activeSeverityLevel);
 }
 
+/**
+ * Interactive Onboarding & Analytical Output Tour powered by Intro.js
+ */
+function startInteractiveTour() {
+    if (typeof introJs !== 'function') {
+        console.warn('Intro.js is not loaded.');
+        return;
+    }
+
+    const sidebarEl = document.querySelector('#control-sidebar') || document.querySelector('.sidebar');
+    const resourceGroupEl = document.querySelector('#resource-knapsack-group') || sidebarEl;
+    const mapCanvasEl = document.querySelector('#network-canvas') || document.querySelector('.canvas-wrapper');
+    const legendBarEl = document.querySelector('#node-legend-bar') || document.querySelector('#incident-drawer');
+    const telemetryHeaderEl = document.querySelector('#console-header') || document.querySelector('#incident-drawer');
+    const consoleLogEl = document.querySelector('#console-log') || document.querySelector('#incident-drawer');
+    const bottomBarEl = document.querySelector('#incident-drawer') || document.querySelector('.console-drawer');
+
+    // Ensure the incident drawer is expanded if collapsed so timeline steps highlight properly
+    const ensureDrawerExpanded = () => {
+        const drawer = document.getElementById('incident-drawer');
+        const toggleBtn = document.getElementById('console-toggle-btn');
+        if (drawer && drawer.classList.contains('collapsed')) {
+            drawer.classList.remove('collapsed');
+            drawer.style.height = window.innerWidth <= 768 ? '240px' : '270px';
+            if (toggleBtn) {
+                toggleBtn.textContent = 'Collapse';
+                toggleBtn.setAttribute('aria-expanded', 'true');
+            }
+            if (leafletMap) {
+                leafletMap.invalidateSize();
+            }
+        }
+    };
+
+    const steps = [
+        {
+            element: sidebarEl || '#control-sidebar',
+            title: '1. Hazard Vector & Epicenter Selection',
+            intro: `
+                <div class="wf-tour-step">
+                    <p><strong>1. Hazard Configuration:</strong> Define the disaster vector, magnitude, and your available emergency budget and repair crews.</p>
+                    <ul class="wf-tour-list">
+                        <li><strong>Geospatial Epicenter:</strong> The AI evaluates your <em>Approach Trajectory</em> and <em>Severity Level (L1–L5)</em> against Miami's street topology to pinpoint the initial impact node at <code>T+00:00</code>.</li>
+                        <li><strong>Weather Penalties:</strong> Higher severity tiers increase physical field restoration times across flooded or debris-blocked streets.</li>
+                    </ul>
+                </div>
+            `,
+            position: 'right'
+        },
+        {
+            element: resourceGroupEl || '#control-sidebar',
+            title: '2. Finite Knapsack Limits & Dynamic Crew Pool',
+            intro: `
+                <div class="wf-tour-step">
+                    <p>Every recovery dispatch is constrained by two finite operational pools:</p>
+                    <ul class="wf-tour-list">
+                        <li><strong>Emergency Budget (USD):</strong> Permanently decremented by physical cable/pipe distance and voltage/capacity upgrade costs.</li>
+                        <li><strong>Dynamic Crew Release:</strong> Repair crews are <em>not</em> permanently consumed—when a field job finishes (<code>RECOVERY_COMPLETED</code>), used crews are <strong>returned to the pool</strong> for subsequent dispatches.</li>
+                        <li><strong>Look-Ahead Queuing:</strong> When <code>Crews = 0</code>, the AI can still queue a repair if <code>(Next Free Crew Time + Field Repair Time) &lt; Battery Deadline</code>.</li>
+                    </ul>
+                </div>
+            `,
+            position: 'right'
+        },
+        {
+            element: mapCanvasEl || '#network-canvas',
+            title: '3. Physical GIS Topology & Conduit States',
+            intro: `
+                <div class="wf-tour-step">
+                    <p><strong>2. Physical Topology:</strong> The live OpenStreetMap infrastructure grid. Watch as the AI autonomously routes power and water physically through the streets.</p>
+                    <div class="wf-tour-legend-grid">
+                        <div><span class="wf-tour-dot wf-tour-dot-amber"></span> <strong>Amber Edge:</strong> Upstream feed severed; child facility running on backup UPS battery.</div>
+                        <div><span class="wf-tour-dot wf-tour-dot-red"></span> <strong>Red Edge:</strong> Backup battery depleted; facility is <code>OFFLINE</code> and cascading failure downstream.</div>
+                        <div><span class="wf-tour-dot wf-tour-dot-cyan"></span> <strong>Dashed Cyan Edge:</strong> New AI-synthesized emergency reroute physically laid along street conduits.</div>
+                    </div>
+                </div>
+            `,
+            position: 'left'
+        },
+        {
+            element: legendBarEl || '#node-legend-bar',
+            title: '4. Cross-Sector Dependencies & Node States',
+            intro: `
+                <div class="wf-tour-step">
+                    <p>Infrastructure nodes belong to 5 interdependent sectors (<strong>Energy, Water, Transport, Health, Comms</strong>):</p>
+                    <ul class="wf-tour-list">
+                        <li><strong>Multi-Lifeline Rules:</strong> <em>Health</em> facilities require active feeds from <strong>both Energy AND Water</strong>; <em>Water</em> and <em>Comms</em> require <strong>Energy</strong>.</li>
+                        <li><strong>Capacity Bottlenecks:</strong> Healthy suppliers have finite out-degree load limits, preventing the AI from overloading a single substation.</li>
+                    </ul>
+                </div>
+            `,
+            position: 'top'
+        },
+        {
+            element: telemetryHeaderEl || '#console-header',
+            title: '5. Consolidated DES Telemetry & Global Clock',
+            intro: `
+                <div class="wf-tour-step">
+                    <p>Monitor all dynamic simulation metrics in a single horizontal glance:</p>
+                    <ul class="wf-tour-list">
+                        <li><strong>Global Simulation Clock (<code>T+HH:MM</code>):</strong> Powered by a priority-queue <em>Discrete Event Simulation (DES)</em> that advances chronologically from event to event.</li>
+                        <li><strong>Impacted vs. Restored:</strong> Compare total threatened nodes against facilities saved before their UPS battery expired.</li>
+                        <li><strong>Live Budget &amp; Crews:</strong> Watch <code>Crews</code> drop during active field work and increment as teams complete jobs and return to base.</li>
+                    </ul>
+                </div>
+            `,
+            position: 'top'
+        },
+        {
+            element: consoleLogEl || '#incident-drawer',
+            title: '6. Live Incident Timeline: Decoding Event Cards',
+            intro: `
+                <div class="wf-tour-step">
+                    <p><strong>3. Live Telemetry &amp; AI Rationale:</strong> Track your budget in real-time and read the exact ethical and mathematical reasoning the LLM uses to save or abandon nodes.</p>
+                    <p class="wf-tour-subhead">Chronological DES Event Types in the Feed:</p>
+                    <div class="wf-tour-badges-stack">
+                        <div><span class="wf-tour-pill wf-tour-pill-impact">EPICENTER • OFFLINE</span> Initial strike at <code>T+00:00</code> severing outgoing feeds.</div>
+                        <div><span class="wf-tour-pill wf-tour-pill-warn">CRITICAL_BATTERY • Dies T+HH:MM</span> Facility lost upstream supply; starts a strict UPS countdown (<code>battery_deadline</code>).</div>
+                        <div><span class="wf-tour-pill wf-tour-pill-rec">ONLINE • Source → Target</span> Field crew finished reroute before deadline; halts cascade &amp; logs <code>Crew released</code>.</div>
+                        <div><span class="wf-tour-pill wf-tour-pill-fail">OFFLINE (T+HH:MM)</span> Battery depleted before restoration could finish; propagates failure to child nodes.</div>
+                    </div>
+                </div>
+            `,
+            position: 'top'
+        },
+        {
+            element: consoleLogEl || '#incident-drawer',
+            title: '7. Multi-Agent Crisis Committee Deliberation',
+            intro: `
+                <div class="wf-tour-step">
+                    <p>Whenever a node enters <code>CRITICAL_BATTERY</code>, a <strong>Multi-Agent Crisis Committee</strong> debates the recovery route in real time before issuing a command:</p>
+                    <div class="wf-tour-badges-stack">
+                        <div><span class="wf-tour-pill wf-tour-pill-eng">ENGINEERING_AGENT</span> Optimizes for shortest physical street path &amp; grid stability.</div>
+                        <div><span class="wf-tour-pill wf-tour-pill-soc">SOCIAL_AGENT</span> Prioritizes <strong>SVI (Social Vulnerability Index)</strong> &amp; <strong>Population Served (Pop)</strong> pills.</div>
+                        <div><span class="wf-tour-pill wf-tour-pill-fin">FINANCE_AGENT</span> Enforces strict Knapsack budget &amp; crew conservation.</div>
+                        <div><span class="wf-tour-pill wf-tour-pill-sup">SUPERVISOR_AGENT</span> Weighs all three proposals, outputs a 20-word binding verdict, and dispatches the <code>&gt; FINAL RECOVERY COMMAND</code>.</div>
+                    </div>
+                </div>
+            `,
+            position: 'top'
+        },
+        {
+            element: bottomBarEl || '#incident-drawer',
+            title: '8. Key Things to Consider When Reading Output',
+            intro: `
+                <div class="wf-tour-step">
+                    <p>When analyzing a simulation run or judging AI performance, keep these operational principles in mind:</p>
+                    <ul class="wf-tour-list">
+                        <li><strong>Why the AI Abandons a Node (Strategic Triage):</strong> If <code>(Current/Next-Crew Time + Field Repair Time) &ge; Battery Deadline</code>, the node <em>cannot</em> physically be saved in time. The AI intentionally abandons it to avoid wasting crews and budget.</li>
+                        <li><strong>Ethical Resource Reservation:</strong> The committee may defer a low-SVI commercial node to preserve crews/budget for a downstream <strong>Hospital (High SVI)</strong>.</li>
+                        <li><strong>Diagnostics &amp; PDF Audit:</strong> Use <em>Run Network Diagnostics</em> to verify graph integrity pre-run, and <em>Export Incident Report (PDF)</em> post-run for the full vector map &amp; audit table.</li>
+                    </ul>
+                </div>
+            `,
+            position: 'top'
+        }
+    ];
+
+    ensureDrawerExpanded();
+
+    try {
+        localStorage.setItem('weatherfall_tour_completed', 'true');
+    } catch (_) {}
+
+    const tour = introJs();
+    tour.setOptions({
+        steps,
+        showProgress: true,
+        showBullets: true,
+        exitOnOverlayClick: true,
+        exitOnEsc: true,
+        nextLabel: 'Next →',
+        prevLabel: '← Back',
+        doneLabel: 'Start Commanding',
+        tooltipClass: 'wf-intro-tooltip',
+        highlightClass: 'wf-intro-highlight'
+    });
+
+    tour.onbeforechange((targetElement) => {
+        if (
+            targetElement &&
+            (targetElement.id === 'node-legend-bar' ||
+                targetElement.id === 'console-header' ||
+                targetElement.id === 'console-log' ||
+                targetElement.id === 'incident-drawer')
+        ) {
+            ensureDrawerExpanded();
+        }
+    });
+
+    tour.oncomplete(() => {
+        try {
+            localStorage.setItem('weatherfall_tour_completed', 'true');
+        } catch (_) {}
+    });
+
+    tour.onexit(() => {
+        try {
+            localStorage.setItem('weatherfall_tour_completed', 'true');
+        } catch (_) {}
+    });
+
+    tour.start();
+}
+
+window.startInteractiveTour = startInteractiveTour;
+
 document.addEventListener('DOMContentLoaded', () => {
     applyTheme(currentTheme);
     initHazardAndMagnitudeSelectors();
     fetchAndRenderTopology();
     updateAuthBar();
+
+    const quickTourBtn = document.getElementById('quick-tour-btn');
+    if (quickTourBtn) {
+        quickTourBtn.addEventListener('click', () => {
+            startInteractiveTour();
+        });
+    }
+
+    // Task 3: First-Visit Auto-Trigger via localStorage
+    try {
+        if (!localStorage.getItem('weatherfall_tour_completed')) {
+            localStorage.setItem('weatherfall_tour_completed', 'true');
+            setTimeout(() => {
+                startInteractiveTour();
+            }, 450);
+        }
+    } catch (_) {}
 
     const themeToggleBtn = document.getElementById('theme-toggle-btn');
     if (themeToggleBtn) {
@@ -2433,16 +2941,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const sidebar = document.getElementById('control-sidebar');
     const sidebarToggleBtn = document.getElementById('sidebar-toggle-btn');
-    const consoleDrawer = document.getElementById('console-drawer');
+    const consoleDrawer = document.getElementById('incident-drawer') || document.getElementById('console-drawer');
     const consoleResizer = document.getElementById('console-resizer');
     const consoleHeader = document.getElementById('console-header');
     const consoleToggleBtn = document.getElementById('console-toggle-btn');
 
-    let lastExpandedHeight = window.innerWidth <= 768 ? Math.round(window.innerHeight * 0.38) : 260;
+    let lastExpandedHeight = window.innerWidth <= 768 ? Math.round(window.innerHeight * 0.38) : 270;
 
     if (window.innerWidth <= 768 && consoleDrawer && consoleToggleBtn) {
         consoleDrawer.classList.add('collapsed');
+        consoleDrawer.style.height = '';
         consoleToggleBtn.textContent = 'Expand';
+        consoleToggleBtn.setAttribute('aria-expanded', 'false');
     }
 
     if (sidebarToggleBtn && sidebar) {
@@ -2461,8 +2971,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!isCollapsed) {
             consoleDrawer.style.height = `${lastExpandedHeight}px`;
             consoleToggleBtn.textContent = 'Collapse';
+            consoleToggleBtn.setAttribute('aria-expanded', 'true');
         } else {
+            consoleDrawer.style.height = '';
             consoleToggleBtn.textContent = 'Expand';
+            consoleToggleBtn.setAttribute('aria-expanded', 'false');
         }
         setTimeout(() => {
             if (leafletMap) leafletMap.invalidateSize();
@@ -2480,7 +2993,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let isDragging = false;
         let didMove = false;
         let startY = 0;
-        let startHeight = 260;
+        let startHeight = 270;
 
         const onPointerDown = (e) => {
             if (e.target.closest('#console-toggle-btn')) return;
@@ -2508,18 +3021,27 @@ document.addEventListener('DOMContentLoaded', () => {
             consoleDrawer.classList.add('is-resizing');
             document.body.classList.add('resizing-drawer');
 
+            const chromeEl = consoleDrawer.querySelector('.drawer-top-chrome');
+            const minChromeHeight = chromeEl ? Math.round(chromeEl.getBoundingClientRect().height) : 76;
             const maxAllowed = Math.floor(window.innerHeight * 0.82);
             const rawHeight = startHeight + deltaY;
 
-            if (rawHeight <= 64) {
+            if (rawHeight <= minChromeHeight + 24) {
                 consoleDrawer.classList.add('collapsed');
-                if (consoleToggleBtn) consoleToggleBtn.textContent = 'Expand';
+                consoleDrawer.style.height = '';
+                if (consoleToggleBtn) {
+                    consoleToggleBtn.textContent = 'Expand';
+                    consoleToggleBtn.setAttribute('aria-expanded', 'false');
+                }
             } else {
-                const clampedHeight = Math.min(maxAllowed, Math.max(96, Math.round(rawHeight)));
+                const clampedHeight = Math.min(maxAllowed, Math.max(minChromeHeight + 56, Math.round(rawHeight)));
                 lastExpandedHeight = clampedHeight;
                 consoleDrawer.classList.remove('collapsed');
                 consoleDrawer.style.height = `${clampedHeight}px`;
-                if (consoleToggleBtn) consoleToggleBtn.textContent = 'Collapse';
+                if (consoleToggleBtn) {
+                    consoleToggleBtn.textContent = 'Collapse';
+                    consoleToggleBtn.setAttribute('aria-expanded', 'true');
+                }
             }
 
             if (leafletMap) {
