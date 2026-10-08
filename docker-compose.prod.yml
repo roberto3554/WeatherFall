@@ -1,0 +1,149 @@
+services:
+  traefik:
+    image: traefik:v3.1
+    container_name: weatherfall_traefik
+    restart: unless-stopped
+    command:
+      - "--api.dashboard=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-sre@weatherfall.io}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--accesslog=true"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt_data:/letsencrypt
+    networks:
+      - weatherfall_net
+
+  db:
+    image: postgres:16-alpine
+    container_name: weatherfall_db_prod
+    restart: unless-stopped
+    command: postgres -c max_connections=200 -c shared_buffers=256MB
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-weatherfall}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-weatherfall_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-weatherfall_db}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-weatherfall} -d $${POSTGRES_DB:-weatherfall_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - weatherfall_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: weatherfall_redis_prod
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - weatherfall_net
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: weatherfall_api_prod
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-weatherfall}:${POSTGRES_PASSWORD:-weatherfall_pass}@db:5432/${POSTGRES_DB:-weatherfall_db}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      DB_POOL_SIZE: 20
+      DB_MAX_OVERFLOW: 10
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-20b}
+      CARTO_API_KEY: ${CARTO_API_KEY:-}
+    volumes:
+      - ./data:/app/data
+    command: gunicorn main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000 --timeout 120 --keep-alive 5 --access-logfile -
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.weatherfall-api.rule=(Host(`${DOMAIN:-localhost}`) || HostRegexp(`.+`)) && (PathPrefix(`/api`) || PathPrefix(`/docs`) || PathPrefix(`/openapi.json`))"
+      - "traefik.http.routers.weatherfall-api.entrypoints=websecure"
+      - "traefik.http.routers.weatherfall-api.priority=100"
+      - "traefik.http.routers.weatherfall-api.tls=true"
+      - "traefik.http.routers.weatherfall-api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.weatherfall-api.loadbalancer.server.port=8000"
+    networks:
+      - weatherfall_net
+
+  celery_worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: weatherfall_celery_worker_prod
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-weatherfall}:${POSTGRES_PASSWORD:-weatherfall_pass}@db:5432/${POSTGRES_DB:-weatherfall_db}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      DB_POOL_SIZE: 20
+      DB_MAX_OVERFLOW: 10
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-20b}
+    volumes:
+      - ./data:/app/data
+    command: celery -A worker.celery_app worker --loglevel=info
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - weatherfall_net
+
+  frontend:
+    image: nginx:alpine
+    container_name: weatherfall_frontend_prod
+    restart: unless-stopped
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+      - ./frontend:/usr/share/nginx/html/static:ro
+    depends_on:
+      - api
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.weatherfall-frontend.rule=(Host(`${DOMAIN:-localhost}`) || HostRegexp(`.+`)) && PathPrefix(`/`)"
+      - "traefik.http.routers.weatherfall-frontend.entrypoints=websecure"
+      - "traefik.http.routers.weatherfall-frontend.priority=10"
+      - "traefik.http.routers.weatherfall-frontend.tls=true"
+      - "traefik.http.routers.weatherfall-frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.weatherfall-frontend.loadbalancer.server.port=80"
+    networks:
+      - weatherfall_net
+
+networks:
+  weatherfall_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  letsencrypt_data:
