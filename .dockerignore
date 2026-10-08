@@ -1,0 +1,17 @@
+# Prevent sensitive environment files, secrets, git history, and runtime data from entering Docker image layers
+.env
+.env.*
+!.env.example
+.git
+.gitignore
+__pycache__/
+*.py[cod]
+*$py.class
+*.sqlite
+*.db
+data/
+letsencrypt/
+acme.json
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
