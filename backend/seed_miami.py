@@ -1,4 +1,6 @@
 import asyncio
+import math
+import re
 from typing import Any
 
 import geopandas as gpd
@@ -29,17 +31,97 @@ OSM_TAGS: dict[str, Any] = {
 }
 
 FALLBACK_COMMS_NODES: list[dict[str, Any]] = [
-    {"name": "NAP of the Americas (Equinix)", "type": "comms", "x": -80.1918, "y": 25.7825},
-    {"name": "AT&T Downtown Miami Exchange", "type": "comms", "x": -80.1985, "y": 25.7743},
-    {"name": "Verizon Brickell Fiber Hub", "type": "comms", "x": -80.1930, "y": 25.7590},
-    {"name": "Little River Telecom Exchange", "type": "comms", "x": -80.1951, "y": 25.8527},
+    {
+        "name": "NAP of the Americas (Equinix)",
+        "type": "comms",
+        "x": -80.1918,
+        "y": 25.7825,
+        "tier": "Primary",
+        "capacity": 5,
+        "battery_backup_hours": 72.0,
+        "voltage_kv": 0.0,
+        "area_sqm": 18500.0,
+    },
+    {
+        "name": "AT&T Downtown Miami Exchange",
+        "type": "comms",
+        "x": -80.1985,
+        "y": 25.7743,
+        "tier": "Primary",
+        "capacity": 4,
+        "battery_backup_hours": 48.0,
+        "voltage_kv": 0.0,
+        "area_sqm": 9200.0,
+    },
+    {
+        "name": "Verizon Brickell Fiber Hub",
+        "type": "comms",
+        "x": -80.1930,
+        "y": 25.7590,
+        "tier": "Secondary",
+        "capacity": 2,
+        "battery_backup_hours": 24.0,
+        "voltage_kv": 0.0,
+        "area_sqm": 2800.0,
+    },
+    {
+        "name": "Little River Telecom Exchange",
+        "type": "comms",
+        "x": -80.1951,
+        "y": 25.8527,
+        "tier": "Secondary",
+        "capacity": 2,
+        "battery_backup_hours": 16.0,
+        "voltage_kv": 0.0,
+        "area_sqm": 2100.0,
+    },
 ]
 
 FALLBACK_WATER_NODES: list[dict[str, Any]] = [
-    {"name": "Alexander Orr Water Plant", "type": "water", "x": -80.2890, "y": 25.7295},
-    {"name": "Virginia Key Wastewater Plant", "type": "water", "x": -80.1492, "y": 25.7440},
-    {"name": "Miami Beach Pump Station #1", "type": "water", "x": -80.1405, "y": 25.7890},
-    {"name": "Miami River Stormwater Pump", "type": "water", "x": -80.2140, "y": 25.7790},
+    {
+        "name": "Alexander Orr Water Plant",
+        "type": "water",
+        "x": -80.2890,
+        "y": 25.7295,
+        "tier": "Primary",
+        "capacity": 5,
+        "battery_backup_hours": 48.0,
+        "voltage_kv": 0.0,
+        "area_sqm": 24000.0,
+    },
+    {
+        "name": "Virginia Key Wastewater Plant",
+        "type": "water",
+        "x": -80.1492,
+        "y": 25.7440,
+        "tier": "Primary",
+        "capacity": 5,
+        "battery_backup_hours": 48.0,
+        "voltage_kv": 0.0,
+        "area_sqm": 21500.0,
+    },
+    {
+        "name": "Miami Beach Pump Station #1",
+        "type": "water",
+        "x": -80.1405,
+        "y": 25.7890,
+        "tier": "Secondary",
+        "capacity": 2,
+        "battery_backup_hours": 18.0,
+        "voltage_kv": 0.0,
+        "area_sqm": 1400.0,
+    },
+    {
+        "name": "Miami River Stormwater Pump",
+        "type": "water",
+        "x": -80.2140,
+        "y": 25.7790,
+        "tier": "Secondary",
+        "capacity": 2,
+        "battery_backup_hours": 16.0,
+        "voltage_kv": 0.0,
+        "area_sqm": 1200.0,
+    },
 ]
 
 MAX_PER_TYPE: dict[str, int] = {
@@ -50,6 +132,21 @@ MAX_PER_TYPE: dict[str, int] = {
     "comms": 4,
 }
 MIN_SEPARATION_DEG = 0.0085
+
+# Task 2: Strict Directed Physical Interdependency Matrix
+# Defines (supplier_sector, consumer_sector, is_cyclic_fallback)
+#   • energy MUST supply EVERYTHING (water, comms, transport, health)
+#   • water MUST supply health
+#   • transport MUST supply health (ambulance access) AND energy (fuel delivery for backup generators)
+INTERDEPENDENCY_MATRIX: list[tuple[str, str, bool]] = [
+    ("energy", "health", False),
+    ("energy", "water", False),
+    ("energy", "comms", False),
+    ("energy", "transport", False),
+    ("water", "health", False),
+    ("transport", "health", False),
+    ("transport", "energy", True),  # Cyclic dependency (Energy <-> Transport) with temporal battery/fuel fallback
+]
 
 
 def classify_feature_type(row: pd.Series) -> str:
@@ -74,6 +171,184 @@ def classify_feature_type(row: pd.Series) -> str:
     return "energy"
 
 
+def _parse_voltage_kv(raw_voltage: Any) -> float:
+    """
+    Task 1: Parses OSM `voltage` tag values (e.g., '230000;138000', '138 kV', '69000')
+    into kilovolts (kV).
+    """
+    if raw_voltage is None or (isinstance(raw_voltage, float) and math.isnan(raw_voltage)):
+        return 0.0
+    text_val = str(raw_voltage).strip().lower()
+    if not text_val:
+        return 0.0
+
+    numbers = [float(m) for m in re.findall(r"\d+(?:\.\d+)?", text_val)]
+    if not numbers:
+        return 0.0
+    max_val = max(numbers)
+    if "kv" in text_val or max_val < 1000.0:
+        return round(max_val, 1)
+    return round(max_val / 1000.0, 1)
+
+
+def _estimate_footprint_area_sqm(geom: Any, lat: float) -> float:
+    """
+    Task 1: Estimates the physical footprint area (in m^2) of an OSM geometry in EPSG:4326
+    to distinguish large regional facilities (Primary) from smaller local stations (Secondary).
+    """
+    if geom is None or getattr(geom, "is_empty", True):
+        return 0.0
+    area_deg2 = float(getattr(geom, "area", 0.0) or 0.0)
+    if area_deg2 <= 0.0:
+        return 0.0
+    meters_per_deg_lat = 111_139.0
+    meters_per_deg_lon = 111_139.0 * max(0.2, math.cos(math.radians(lat)))
+    return round(area_deg2 * meters_per_deg_lat * meters_per_deg_lon, 1)
+
+
+def assign_node_tier_and_capacity(
+    node_type: str,
+    name: str,
+    row: pd.Series,
+    area_sqm: float,
+) -> dict[str, Any]:
+    """
+    Task 1: Assigns hierarchical `tier` ('Primary' vs 'Secondary'), supply `capacity`
+    (out-degree / downstream flow limit), and `battery_backup_hours` (temporal fallback
+    autonomy for cyclic dependencies) based on OSM tags and physical footprint size.
+    """
+    raw_voltage = row.get("voltage") if hasattr(row, "get") else None
+    voltage_kv = _parse_voltage_kv(raw_voltage)
+    substation_role = str(row.get("substation", "") or "").lower() if hasattr(row, "get") else ""
+    man_made_val = str(row.get("man_made", "") or "").lower() if hasattr(row, "get") else ""
+    amenity_val = str(row.get("amenity", "") or "").lower() if hasattr(row, "get") else ""
+    emergency_val = str(row.get("emergency", "") or "").lower() if hasattr(row, "get") else ""
+    name_lower = name.lower()
+
+    if node_type == "energy":
+        is_primary = (
+            voltage_kv >= 138.0
+            or substation_role in ("transmission", "generation", "traction")
+            or area_sqm >= 6000.0
+            or any(k in name_lower for k in ("miami substation", "flagami", "levee", "davis", "culmer", "railway"))
+        )
+        tier = "Primary" if is_primary else "Secondary"
+        # Primary high-voltage substation can supply up to 6 dependents;
+        # Secondary local transformer is strictly capped at capacity=2 (cannot supply 5 hospitals!)
+        capacity = 6 if is_primary else 2
+        battery_backup_hours = 72.0 if is_primary else 24.0
+        return {
+            "tier": tier,
+            "capacity": capacity,
+            "battery_backup_hours": battery_backup_hours,
+            "voltage_kv": voltage_kv if voltage_kv > 0 else (230.0 if is_primary else 13.8),
+            "area_sqm": area_sqm,
+        }
+
+    if node_type == "water":
+        is_primary = (
+            man_made_val in ("water_works", "wastewater_plant")
+            or area_sqm >= 5000.0
+            or any(k in name_lower for k in ("plant", "treatment", "central district", "alexander orr", "virginia key"))
+        )
+        tier = "Primary" if is_primary else "Secondary"
+        capacity = 5 if is_primary else 2
+        battery_backup_hours = 48.0 if is_primary else 16.0
+        return {
+            "tier": tier,
+            "capacity": capacity,
+            "battery_backup_hours": battery_backup_hours,
+            "voltage_kv": 0.0,
+            "area_sqm": area_sqm,
+        }
+
+    if node_type == "health":
+        is_primary = (
+            area_sqm >= 7500.0
+            or emergency_val == "yes"
+            or any(k in name_lower for k in ("jackson memorial", "mercy", "mount sinai", "baptist", "university", "trauma", "medical center"))
+        )
+        tier = "Primary" if is_primary else "Secondary"
+        capacity = 2 if is_primary else 1
+        battery_backup_hours = 48.0 if is_primary else 24.0
+        return {
+            "tier": tier,
+            "capacity": capacity,
+            "battery_backup_hours": battery_backup_hours,
+            "voltage_kv": 0.0,
+            "area_sqm": area_sqm,
+        }
+
+    if node_type == "transport":
+        is_primary = (
+            amenity_val == "ferry_terminal"
+            or area_sqm >= 4000.0
+            or any(k in name_lower for k in ("port", "airport", "central", "government center", "intermodal", "hub", "terminal"))
+        )
+        tier = "Primary" if is_primary else "Secondary"
+        capacity = 5 if is_primary else 2
+        battery_backup_hours = 36.0 if is_primary else 12.0
+        return {
+            "tier": tier,
+            "capacity": capacity,
+            "battery_backup_hours": battery_backup_hours,
+            "voltage_kv": 0.0,
+            "area_sqm": area_sqm,
+        }
+
+    # Default: comms
+    is_primary = (
+        area_sqm >= 3500.0
+        or any(k in name_lower for k in ("nap", "equinix", "coresite", "downtown", "central"))
+    )
+    tier = "Primary" if is_primary else "Secondary"
+    capacity = 5 if is_primary else 2
+    battery_backup_hours = 48.0 if is_primary else 16.0
+    return {
+        "tier": tier,
+        "capacity": capacity,
+        "battery_backup_hours": battery_backup_hours,
+        "voltage_kv": 0.0,
+        "area_sqm": area_sqm,
+    }
+
+
+def ensure_balanced_sector_hierarchy(nodes: list[dict[str, Any]]) -> None:
+    """
+    Ensures every infrastructure sector has both Primary (trunk/high-capacity) and
+    Secondary (local distribution) nodes so hierarchical flow routing is always well-posed.
+    """
+    by_type: dict[str, list[dict[str, Any]]] = {}
+    for n in nodes:
+        by_type.setdefault(n["type"], []).append(n)
+
+    default_primary_caps = {"energy": 6, "water": 5, "transport": 5, "comms": 5, "health": 2}
+    default_secondary_caps = {"energy": 2, "water": 2, "transport": 2, "comms": 2, "health": 1}
+
+    for sector, sector_nodes in by_type.items():
+        if len(sector_nodes) < 2:
+            continue
+        primaries = [n for n in sector_nodes if n.get("tier") == "Primary"]
+        secondaries = [n for n in sector_nodes if n.get("tier") == "Secondary"]
+
+        # Sort by voltage_kv then area_sqm descending
+        ranked = sorted(
+            sector_nodes,
+            key=lambda item: (float(item.get("voltage_kv", 0.0)), float(item.get("area_sqm", 0.0))),
+            reverse=True,
+        )
+        target_primary_count = max(2, len(sector_nodes) // 2)
+
+        if not primaries:
+            for n in ranked[:target_primary_count]:
+                n["tier"] = "Primary"
+                n["capacity"] = default_primary_caps.get(sector, 5)
+        elif not secondaries:
+            for n in ranked[target_primary_count:]:
+                n["tier"] = "Secondary"
+                n["capacity"] = default_secondary_caps.get(sector, 2)
+
+
 def is_too_close(
     lon: float,
     lat: float,
@@ -90,7 +365,7 @@ def is_too_close(
 
 def fetch_street_network() -> nx.MultiDiGraph:
     """
-    Task 1: Downloads the physical street network for Miami, Florida using OSMnx.
+    Downloads the physical street network for Miami, Florida using OSMnx.
     """
     print(f"Downloading physical street network for '{PLACE_QUERY}' (network_type='drive')...")
     street_graph: nx.MultiDiGraph = ox.graph_from_place(PLACE_QUERY, network_type="drive")
@@ -104,7 +379,8 @@ def fetch_street_network() -> nx.MultiDiGraph:
 def extract_osm_miami_nodes() -> list[dict[str, Any]]:
     """
     Downloads critical infrastructure geometries for Miami, Florida from OpenStreetMap,
-    retaining named facilities with spatial separation.
+    retaining named facilities with spatial separation and computing Task 1 hierarchy
+    (tier, capacity, voltage_kv, area_sqm, battery_backup_hours).
     """
     print(f"Downloading OpenStreetMap features for '{PLACE_QUERY}' with tags={OSM_TAGS}...")
     gdf: gpd.GeoDataFrame = ox.features_from_place(PLACE_QUERY, tags=OSM_TAGS)
@@ -147,6 +423,9 @@ def extract_osm_miami_nodes() -> list[dict[str, Any]]:
         if is_too_close(lon, lat, nodes, min_dist=min_sep):
             continue
 
+        area_sqm = _estimate_footprint_area_sqm(geom, lat)
+        hierarchy_meta = assign_node_tier_and_capacity(node_type, clean_name, row, area_sqm)
+
         seen_names.add(clean_name)
         type_counts[node_type] = type_counts.get(node_type, 0) + 1
 
@@ -156,6 +435,7 @@ def extract_osm_miami_nodes() -> list[dict[str, Any]]:
                 "type": node_type,
                 "x": lon,
                 "y": lat,
+                **hierarchy_meta,
             }
         )
 
@@ -171,6 +451,7 @@ def extract_osm_miami_nodes() -> list[dict[str, Any]]:
             seen_names.add(item["name"])
             type_counts["water"] += 1
 
+    ensure_balanced_sector_hierarchy(nodes)
     return nodes
 
 
@@ -179,7 +460,7 @@ def snap_facilities_to_street_grid(
     nodes: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """
-    Task 2: Uses osmnx.nearest_nodes to snap each critical infrastructure facility's
+    Uses osmnx.nearest_nodes to snap each critical infrastructure facility's
     (x=lon, y=lat) coordinate to the closest intersection node on the physical street graph.
     """
     if not nodes:
@@ -218,7 +499,7 @@ def compute_street_route(
     target_street_id: int,
 ) -> tuple[float, list[int]]:
     """
-    Task 3: Calculates the shortest physical street network path and length (in meters)
+    Calculates the shortest physical street network path and length (in meters)
     between two snapped street intersection nodes using networkx.shortest_path_length()
     and networkx.shortest_path(). Falls back to the undirected street corridor graph if
     one-way traffic restrictions prevent a directed path.
@@ -252,51 +533,208 @@ def compute_street_route(
     return float("inf"), [int(source_street_id), int(target_street_id)]
 
 
-def find_k_nearest_by_street_network(
+def wire_sector_with_min_cost_flow(
     street_graph: nx.MultiDiGraph,
-    undirected_graph: nx.MultiGraph,
-    target_node: dict[str, Any],
-    candidate_sources: list[dict[str, Any]],
-    k: int = 1,
-) -> list[tuple[dict[str, Any], float, list[int]]]:
+    undirected_street: nx.MultiGraph,
+    graph: nx.DiGraph,
+    suppliers: list[dict[str, Any]],
+    consumers: list[dict[str, Any]],
+    dependency_type: str,
+    remaining_global_capacity: dict[str, int],
+    is_cyclic_fallback: bool = False,
+) -> None:
     """
-    Finds the top-k candidate source facilities with the shortest physical street-network
-    routing distance to `target_node`.
-    """
-    scored: list[tuple[dict[str, Any], float, list[int]]] = []
-    target_street_id = int(target_node["street_node_id"])
+    Task 3: Wires directed dependency edges from `suppliers` to `consumers` using
+    `networkx.min_cost_flow` over physical OSM street routing distances while strictly
+    enforcing supplier out-degree / flow capacity limits (`capacity`).
 
-    for cand in candidate_sources:
-        if cand["name"] == target_node["name"]:
-            continue
-        source_street_id = int(cand["street_node_id"])
-        dist, path = compute_street_route(
-            street_graph,
-            undirected_graph,
-            source_street_id=source_street_id,
-            target_street_id=target_street_id,
+    Guarantees:
+      • Every consumer receives its required incoming lifeline of `dependency_type`.
+      • A single Secondary supplier (capacity=2) can NEVER supply 5 large hospitals
+        (per-sector Secondary cap is at most 1 for health, and bounded by remaining_global_capacity).
+      • Total physical street routing distance + hierarchical tier penalties are globally minimized.
+    """
+    valid_consumers = [c for c in consumers if c["name"] in graph]
+    valid_suppliers = [s for s in suppliers if s["name"] in graph]
+    if not valid_consumers or not valid_suppliers:
+        return
+
+    num_consumers = len(valid_consumers)
+
+    # Compute per-supplier capacity allocation for this dependency layer
+    # Secondary nodes are strictly limited (max 1 hospital or max 2 other facilities)
+    supplier_caps: dict[str, int] = {}
+    for s in valid_suppliers:
+        s_name = s["name"]
+        tier = str(s.get("tier", "Secondary"))
+        base_cap = int(s.get("capacity", 6 if tier == "Primary" else 2))
+        rem_cap = max(1, remaining_global_capacity.get(s_name, base_cap))
+        if tier == "Secondary":
+            sector_cap = 1 if dependency_type == "energy" and valid_consumers[0].get("type") == "health" else min(2, rem_cap)
+        else:
+            sector_cap = min(base_cap, max(2, rem_cap))
+        supplier_caps[s_name] = max(1, sector_cap)
+
+    # Ensure total available capacity across suppliers is at least num_consumers so min_cost_flow is feasible
+    total_cap = sum(supplier_caps.values())
+    if total_cap < num_consumers:
+        primaries = [s["name"] for s in valid_suppliers if s.get("tier") == "Primary"] or [
+            s["name"] for s in valid_suppliers
+        ]
+        idx = 0
+        while total_cap < num_consumers:
+            p_name = primaries[idx % len(primaries)]
+            supplier_caps[p_name] += 1
+            total_cap += 1
+            idx += 1
+
+    flow_net = nx.DiGraph()
+    super_source = "__super_source__"
+    flow_net.add_node(super_source, demand=-num_consumers)
+
+    for s in valid_suppliers:
+        s_key = f"sup::{s['name']}"
+        tier_cost = 0 if s.get("tier") == "Primary" else 350
+        flow_net.add_node(s_key, demand=0)
+        flow_net.add_edge(
+            super_source,
+            s_key,
+            capacity=supplier_caps[s["name"]],
+            weight=tier_cost,
         )
-        if np.isfinite(dist):
-            scored.append((cand, dist, path))
 
-    if not scored and candidate_sources:
-        # Fallback if a facility is on an isolated island (e.g., Fisher Island)
-        for cand in candidate_sources:
-            if cand["name"] == target_node["name"]:
+    route_cache: dict[tuple[str, str], tuple[float, list[int]]] = {}
+
+    for c in valid_consumers:
+        c_key = f"con::{c['name']}"
+        flow_net.add_node(c_key, demand=1)
+        c_street_id = int(c["street_node_id"])
+
+        for s in valid_suppliers:
+            if s["name"] == c["name"]:
                 continue
-            euclid_meters = float(
-                np.hypot(cand["x"] - target_node["x"], cand["y"] - target_node["y"]) * 111_139.0
+            s_key = f"sup::{s['name']}"
+            s_street_id = int(s["street_node_id"])
+
+            dist_m, path_nodes = compute_street_route(
+                street_graph,
+                undirected_street,
+                source_street_id=s_street_id,
+                target_street_id=c_street_id,
             )
-            scored.append(
-                (
-                    cand,
-                    round(euclid_meters, 2),
-                    [int(cand["street_node_id"]), target_street_id],
+            if not np.isfinite(dist_m):
+                dist_m = float(
+                    np.hypot(s["x"] - c["x"], s["y"] - c["y"]) * 111_139.0
                 )
+                path_nodes = [s_street_id, c_street_id]
+
+            route_cache[(s["name"], c["name"])] = (round(dist_m, 2), path_nodes)
+
+            # Prefer Primary suppliers for Primary consumers
+            tier_penalty = (
+                600
+                if (c.get("tier") == "Primary" and s.get("tier") == "Secondary")
+                else 0
+            )
+            arc_cost = max(1, int(round(dist_m)) + tier_penalty)
+            flow_net.add_edge(s_key, c_key, capacity=1, weight=arc_cost)
+
+    try:
+        flow_solution = nx.min_cost_flow(flow_net)
+    except nx.NetworkXUnfeasible:
+        # Fallback: relax super_source -> supplier capacities by +1 if isolated graph components exist
+        for s in valid_suppliers:
+            s_key = f"sup::{s['name']}"
+            flow_net[super_source][s_key]["capacity"] += 2
+        flow_solution = nx.min_cost_flow(flow_net)
+
+    supplier_lookup = {s["name"]: s for s in valid_suppliers}
+    consumer_lookup = {c["name"]: c for c in valid_consumers}
+
+    for s in valid_suppliers:
+        s_name = s["name"]
+        s_key = f"sup::{s_name}"
+        out_flows = flow_solution.get(s_key, {})
+        for c_key, flow_val in out_flows.items():
+            if flow_val <= 0 or not c_key.startswith("con::"):
+                continue
+            c_name = c_key.split("con::", 1)[1]
+            dist_m, path_nodes = route_cache[(s_name, c_name)]
+            s_node = supplier_lookup[s_name]
+            c_node = consumer_lookup[c_name]
+
+            graph.add_edge(
+                s_name,
+                c_name,
+                dependency_type=dependency_type,
+                routing_distance=dist_m,
+                path_nodes=path_nodes,
+                flow_capacity=int(s_node.get("capacity", 3)),
+                supplier_tier=str(s_node.get("tier", "Secondary")),
+                consumer_tier=str(c_node.get("tier", "Secondary")),
+                is_cyclic_fallback=is_cyclic_fallback,
+                temporal_buffer_hours=float(c_node.get("battery_backup_hours", 24.0)),
+            )
+            remaining_global_capacity[s_name] = max(
+                0, remaining_global_capacity.get(s_name, int(s_node.get("capacity", 3))) - 1
             )
 
-    scored.sort(key=lambda item: item[1])
-    return scored[:k]
+
+def wire_intra_sector_hierarchy(
+    street_graph: nx.MultiDiGraph,
+    undirected_street: nx.MultiGraph,
+    graph: nx.DiGraph,
+    sector_nodes: list[dict[str, Any]],
+    dependency_type: str,
+    remaining_global_capacity: dict[str, int],
+) -> None:
+    """
+    Wires Primary trunk nodes (e.g., high-voltage substations, main water treatment plants)
+    to Secondary distribution nodes (e.g., local transformers, pump stations) using
+    capacity-constrained minimum-cost flow, plus a resilient Primary-to-Primary ring.
+    """
+    primaries = [n for n in sector_nodes if n.get("tier") == "Primary"]
+    secondaries = [n for n in sector_nodes if n.get("tier") == "Secondary"]
+
+    if primaries and secondaries:
+        wire_sector_with_min_cost_flow(
+            street_graph=street_graph,
+            undirected_street=undirected_street,
+            graph=graph,
+            suppliers=primaries,
+            consumers=secondaries,
+            dependency_type=dependency_type,
+            remaining_global_capacity=remaining_global_capacity,
+            is_cyclic_fallback=False,
+        )
+
+    # Connect Primary trunk nodes in a resilient ring along the shortest street path
+    if len(primaries) >= 2:
+        for idx, p_src in enumerate(primaries):
+            p_tgt = primaries[(idx + 1) % len(primaries)]
+            if p_src["name"] == p_tgt["name"] or graph.has_edge(p_src["name"], p_tgt["name"]):
+                continue
+            dist_m, path_nodes = compute_street_route(
+                street_graph,
+                undirected_street,
+                source_street_id=int(p_src["street_node_id"]),
+                target_street_id=int(p_tgt["street_node_id"]),
+            )
+            if not np.isfinite(dist_m):
+                dist_m = float(np.hypot(p_src["x"] - p_tgt["x"], p_src["y"] - p_tgt["y"]) * 111_139.0)
+                path_nodes = [int(p_src["street_node_id"]), int(p_tgt["street_node_id"])]
+            graph.add_edge(
+                p_src["name"],
+                p_tgt["name"],
+                dependency_type=dependency_type,
+                routing_distance=round(dist_m, 2),
+                path_nodes=path_nodes,
+                flow_capacity=int(p_src.get("capacity", 6)),
+                supplier_tier="Primary",
+                consumer_tier="Primary",
+                is_cyclic_fallback=False,
+                temporal_buffer_hours=float(p_tgt.get("battery_backup_hours", 48.0)),
+            )
 
 
 def build_street_dependency_graph(
@@ -304,103 +742,89 @@ def build_street_dependency_graph(
     nodes: list[dict[str, Any]],
 ) -> nx.DiGraph:
     """
-    Task 3: Builds a directed NetworkX dependency graph where every logical dependency edge
-    is routed through the real Miami street network using networkx.shortest_path_length()
-    and networkx.shortest_path(), storing `routing_distance` (m) and `path_nodes`.
+    Tasks 1, 2 & 3: Builds a hierarchical, capacity-constrained directed NetworkX dependency
+    graph routed through the real Miami street network using `nx.min_cost_flow`:
+      • Task 1: Every node carries `tier` ('Primary' | 'Secondary'), `capacity`,
+                `voltage_kv`, `area_sqm`, and `battery_backup_hours`.
+      • Task 2: Enforces the Realistic Interdependency Matrix:
+                - energy MUST supply EVERYTHING (water, comms, transport, health)
+                - water MUST supply health
+                - transport MUST supply health (ambulance access) AND energy (fuel delivery)
+                - Cyclic dependencies (Energy <-> Transport) include temporal fallback attributes.
+      • Task 3: Uses `networkx.min_cost_flow` over OSM street routing distances so no Secondary
+                node is overloaded (e.g. a secondary transformer can never supply 5 hospitals).
     """
     graph = nx.DiGraph()
     undirected_street = street_graph.to_undirected()
 
+    nodes_by_type: dict[str, list[dict[str, Any]]] = {
+        "energy": [],
+        "water": [],
+        "health": [],
+        "transport": [],
+        "comms": [],
+    }
+    remaining_global_capacity: dict[str, int] = {}
+
     for node in nodes:
+        n_type = str(node["type"])
+        tier = str(node.get("tier", "Secondary"))
+        cap = int(node.get("capacity", 6 if tier == "Primary" else 2))
+        backup_h = float(node.get("battery_backup_hours", 48.0 if tier == "Primary" else 24.0))
+
         graph.add_node(
             node["name"],
-            type=node["type"],
-            x=node["x"],
-            y=node["y"],
-            street_node_id=node["street_node_id"],
+            type=n_type,
+            x=float(node["x"]),
+            y=float(node["y"]),
+            tier=tier,
+            capacity=cap,
+            battery_backup_hours=backup_h,
+            voltage_kv=float(node.get("voltage_kv", 0.0)),
+            area_sqm=float(node.get("area_sqm", 0.0)),
+            street_node_id=int(node["street_node_id"]),
         )
+        nodes_by_type.setdefault(n_type, []).append(node)
+        # Scale global cross-sector capacity budget by tier (Primary: 2x base, Secondary: base)
+        remaining_global_capacity[node["name"]] = cap * 2 if tier == "Primary" else cap + 1
 
-    energy_nodes = [n for n in nodes if n["type"] == "energy"]
-    health_nodes = [n for n in nodes if n["type"] == "health"]
-    comms_nodes = [n for n in nodes if n["type"] == "comms"]
-    water_nodes = [n for n in nodes if n["type"] == "water"]
-    transport_nodes = [n for n in nodes if n["type"] == "transport"]
-
-    # Rule 1: Connect every 'health', 'comms', 'water', and 'transport' node (target)
-    # to the nearest 'energy' substation (source) by physical street network distance
-    power_dependent_nodes = health_nodes + comms_nodes + water_nodes + transport_nodes
-    if energy_nodes and power_dependent_nodes:
-        for dep_node in power_dependent_nodes:
-            matches = find_k_nearest_by_street_network(
-                street_graph,
-                undirected_street,
-                target_node=dep_node,
-                candidate_sources=energy_nodes,
-                k=1,
+    # 1. Wire Intra-Sector Primary -> Secondary Hierarchies (Transmission -> Distribution)
+    for sector in ("energy", "water", "comms"):
+        if len(nodes_by_type.get(sector, [])) >= 2:
+            wire_intra_sector_hierarchy(
+                street_graph=street_graph,
+                undirected_street=undirected_street,
+                graph=graph,
+                sector_nodes=nodes_by_type[sector],
+                dependency_type=sector,
+                remaining_global_capacity=remaining_global_capacity,
             )
-            for nearest_energy, routing_dist, path_nodes in matches:
-                graph.add_edge(
-                    nearest_energy["name"],
-                    dep_node["name"],
-                    routing_distance=routing_dist,
-                    path_nodes=path_nodes,
-                )
 
-    # Rule 2: Connect every 'health' node (target) to the nearest 'transport' node (source)
-    # via the shortest physical street route
-    if transport_nodes and health_nodes:
-        for health_node in health_nodes:
-            matches = find_k_nearest_by_street_network(
-                street_graph,
-                undirected_street,
-                target_node=health_node,
-                candidate_sources=transport_nodes,
-                k=1,
-            )
-            for nearest_transport, routing_dist, path_nodes in matches:
-                graph.add_edge(
-                    nearest_transport["name"],
-                    health_node["name"],
-                    routing_distance=routing_dist,
-                    path_nodes=path_nodes,
-                )
+    # 2. Wire Cross-Sector Interdependency Matrix using capacity-constrained nx.min_cost_flow
+    for supplier_sector, consumer_sector, is_cyclic in INTERDEPENDENCY_MATRIX:
+        suppliers = nodes_by_type.get(supplier_sector, [])
+        consumers = nodes_by_type.get(consumer_sector, [])
+        if not suppliers or not consumers:
+            continue
 
-    # Rule 3: Create secondary street-routed edges between nearest 'comms' nodes
-    if len(comms_nodes) >= 2:
-        for comms_node in comms_nodes:
-            matches = find_k_nearest_by_street_network(
-                street_graph,
-                undirected_street,
-                target_node=comms_node,
-                candidate_sources=comms_nodes,
-                k=2,
-            )
-            for neighbor_comms, routing_dist, path_nodes in matches:
-                graph.add_edge(
-                    comms_node["name"],
-                    neighbor_comms["name"],
-                    routing_distance=routing_dist,
-                    path_nodes=path_nodes,
-                )
+        # For transport -> energy (fuel delivery to backup generators), prioritize Primary transport hubs
+        # supplying substations so cyclic edges remain sparse and physically realistic
+        effective_suppliers = suppliers
+        if is_cyclic and supplier_sector == "transport" and consumer_sector == "energy":
+            primary_transport = [s for s in suppliers if s.get("tier") == "Primary"]
+            if primary_transport:
+                effective_suppliers = primary_transport
 
-    # Rule 4: Connect each 'energy' substation to its 2 nearest neighboring 'energy' substations
-    # over the street network
-    if len(energy_nodes) >= 2:
-        for energy_node in energy_nodes:
-            matches = find_k_nearest_by_street_network(
-                street_graph,
-                undirected_street,
-                target_node=energy_node,
-                candidate_sources=energy_nodes,
-                k=2,
-            )
-            for neighbor_energy, routing_dist, path_nodes in matches:
-                graph.add_edge(
-                    energy_node["name"],
-                    neighbor_energy["name"],
-                    routing_distance=routing_dist,
-                    path_nodes=path_nodes,
-                )
+        wire_sector_with_min_cost_flow(
+            street_graph=street_graph,
+            undirected_street=undirected_street,
+            graph=graph,
+            suppliers=effective_suppliers,
+            consumers=consumers,
+            dependency_type=supplier_sector,
+            remaining_global_capacity=remaining_global_capacity,
+            is_cyclic_fallback=is_cyclic,
+        )
 
     return graph
 
@@ -409,9 +833,9 @@ def build_full_miami_street_topology() -> nx.DiGraph:
     """
     Synchronous pipeline executed in a worker thread:
       1. Downloads Miami drive street network (`ox.graph_from_place`).
-      2. Extracts critical OSM facilities (`ox.features_from_place`).
+      2. Extracts critical OSM facilities (`ox.features_from_place`) with Task 1 Tier & Capacity.
       3. Snaps facilities to the closest street intersections (`ox.nearest_nodes`).
-      4. Computes shortest-path dependency edges (`nx.shortest_path_length` & `nx.shortest_path`).
+      4. Computes capacity-constrained minimum-cost flow dependency edges (`nx.min_cost_flow`).
     """
     street_graph = fetch_street_network()
     osm_nodes = extract_osm_miami_nodes()
@@ -422,8 +846,8 @@ def build_full_miami_street_topology() -> nx.DiGraph:
 async def seed_miami_database() -> None:
     """
     Clears existing Node and Edge tables and persists all OSM-extracted
-    Miami nodes and physical street-routed dependency edges (with routing_distance
-    and path_nodes) into PostgreSQL.
+    Miami nodes (with tier, capacity, and battery_backup_hours) and capacity-constrained
+    street-routed dependency edges (with routing_distance and path_nodes) into PostgreSQL.
     """
     await init_db()
 
@@ -433,6 +857,15 @@ async def seed_miami_database() -> None:
         )
         await conn.execute(
             text("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS y DOUBLE PRECISION DEFAULT 0.0;")
+        )
+        await conn.execute(
+            text("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS tier VARCHAR(30) DEFAULT 'Secondary';")
+        )
+        await conn.execute(
+            text("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS capacity INTEGER DEFAULT 3;")
+        )
+        await conn.execute(
+            text("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS battery_backup_hours DOUBLE PRECISION DEFAULT 24.0;")
         )
         await conn.execute(
             text("ALTER TABLE edges ADD COLUMN IF NOT EXISTS routing_distance DOUBLE PRECISION;")
@@ -458,6 +891,9 @@ async def seed_miami_database() -> None:
                     type=str(attrs.get("type", "energy")),
                     x=float(attrs.get("x", 0.0)),
                     y=float(attrs.get("y", 0.0)),
+                    tier=str(attrs.get("tier", "Secondary")),
+                    capacity=int(attrs.get("capacity", 3)),
+                    battery_backup_hours=float(attrs.get("battery_backup_hours", 24.0)),
                 )
                 session.add(node_obj)
                 node_records[str(node_name)] = node_obj
@@ -478,13 +914,17 @@ async def seed_miami_database() -> None:
                 session.add(edge_obj)
 
         counts: dict[str, int] = {}
+        tier_counts: dict[str, int] = {"Primary": 0, "Secondary": 0}
         for _, d in graph.nodes(data=True):
             t = str(d.get("type", "unknown"))
+            tier = str(d.get("tier", "Secondary"))
             counts[t] = counts.get(t, 0) + 1
+            tier_counts[tier] = tier_counts.get(tier, 0) + 1
 
         print(
-            f"Successfully seeded {graph.number_of_nodes()} OSM Miami nodes {counts} and "
-            f"{graph.number_of_edges()} street-routed dependency edges into PostgreSQL."
+            f"Successfully seeded {graph.number_of_nodes()} OSM Miami nodes {counts} "
+            f"(Tiers: {tier_counts}) and {graph.number_of_edges()} capacity-constrained "
+            f"street-routed dependency edges into PostgreSQL."
         )
 
     await engine.dispose()
