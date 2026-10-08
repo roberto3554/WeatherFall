@@ -4,6 +4,7 @@ const TOKEN_KEY = 'weatherfall_token';
 const USER_KEY = 'weatherfall_username';
 const ADMIN_KEY = 'weatherfall_is_admin';
 const THEME_STORAGE_KEY = 'weatherfall_theme';
+const TOPOLOGY_LOCK_KEY = 'weatherfall_topology_critical_lock';
 
 const DARK_TILE_URL = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
 const LIGHT_TILE_URL = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
@@ -304,6 +305,40 @@ function initControls() {
             await createManualEdge(srcId, tgtId);
         });
     }
+
+    // Topological Integrity Validator ('Run Network Diagnostics' button & modal)
+    const runDiagBtn = document.getElementById('run-diagnostics-btn');
+    if (runDiagBtn) {
+        runDiagBtn.addEventListener('click', () => {
+            runNetworkDiagnostics({ silent: false });
+        });
+    }
+
+    const rerunDiagBtn = document.getElementById('diagnostic-rerun-btn');
+    if (rerunDiagBtn) {
+        rerunDiagBtn.addEventListener('click', () => {
+            runNetworkDiagnostics({ silent: false });
+        });
+    }
+
+    const closeDiagBtn = document.getElementById('diagnostic-modal-close');
+    if (closeDiagBtn) {
+        closeDiagBtn.addEventListener('click', closeDiagnosticModal);
+    }
+
+    const dismissDiagBtn = document.getElementById('diagnostic-dismiss-btn');
+    if (dismissDiagBtn) {
+        dismissDiagBtn.addEventListener('click', closeDiagnosticModal);
+    }
+
+    const diagBackdrop = document.getElementById('diagnostic-modal-backdrop');
+    if (diagBackdrop) {
+        diagBackdrop.addEventListener('click', (e) => {
+            if (e.target === diagBackdrop) {
+                closeDiagnosticModal();
+            }
+        });
+    }
 }
 
 /**
@@ -398,6 +433,7 @@ async function loadAllTopology() {
         renderEdgesTable(registeredEdges);
         populateManualEdgeSelects(registeredNodes);
         renderMapTopology();
+        await runNetworkDiagnostics({ silent: true });
 
         if (!hasInitialBoundsFit && map && registeredNodes.length > 0) {
             const validCoords = registeredNodes
@@ -1035,4 +1071,209 @@ function populateManualEdgeSelects(nodes) {
 
     srcSel.innerHTML = `<option value="">Source Facility…</option>${optionsHtml}`;
     tgtSel.innerHTML = `<option value="">Target Facility…</option>${optionsHtml}`;
+}
+
+let toastHideTimer = null;
+
+/**
+ * Displays a green 'Topology Valid - System Go' toast notification.
+ */
+function showTopologyToast(message = 'Topology Valid - System Go', variant = 'success') {
+    const toastEl = document.getElementById('topology-toast');
+    const textEl = document.getElementById('topology-toast-text');
+    const iconEl = document.getElementById('topology-toast-icon');
+    if (!toastEl || !textEl) return;
+
+    textEl.textContent = message;
+    if (iconEl) {
+        iconEl.textContent = variant === 'error' ? '✕' : '✓';
+    }
+    toastEl.className = `topology-toast topology-toast-${variant}`;
+    toastEl.classList.remove('hidden');
+
+    if (toastHideTimer) {
+        clearTimeout(toastHideTimer);
+    }
+    toastHideTimer = setTimeout(() => {
+        toastEl.classList.add('hidden');
+    }, 4200);
+}
+
+/**
+ * Updates the toolbar status pill and cross-app simulation failsafe state.
+ */
+function syncTopologyFailsafeState(issues) {
+    const criticalCount = issues.filter((i) => i.level === 'critical').length;
+    const warningCount = issues.filter((i) => i.level === 'warning').length;
+    const hasCritical = criticalCount > 0;
+
+    // Broadcast critical lock state across tabs/views via localStorage
+    localStorage.setItem(TOPOLOGY_LOCK_KEY, hasCritical ? 'true' : 'false');
+
+    const pillEl = document.getElementById('diagnostics-status-pill');
+    const diagBtn = document.getElementById('run-diagnostics-btn');
+    const headerLockBadge = document.getElementById('admin-sim-failsafe-badge');
+
+    if (headerLockBadge) {
+        headerLockBadge.classList.toggle('hidden', !hasCritical);
+    }
+
+    if (pillEl && diagBtn) {
+        diagBtn.classList.remove('diag-btn-valid', 'diag-btn-warning', 'diag-btn-critical');
+        if (criticalCount > 0) {
+            pillEl.textContent = `${criticalCount} Critical`;
+            pillEl.className = 'diagnostics-status-pill pill-critical';
+            diagBtn.classList.add('diag-btn-critical');
+        } else if (warningCount > 0) {
+            pillEl.textContent = `${warningCount} Warning${warningCount > 1 ? 's' : ''}`;
+            pillEl.className = 'diagnostics-status-pill pill-warning';
+            diagBtn.classList.add('diag-btn-warning');
+        } else {
+            pillEl.textContent = 'System Go';
+            pillEl.className = 'diagnostics-status-pill pill-valid';
+            diagBtn.classList.add('diag-btn-valid');
+        }
+    }
+}
+
+/**
+ * Task 3: Calls GET /api/v1/topology/validate to run the NetworkX Topological Integrity Validator.
+ * - If array is empty: shows green 'Topology Valid - System Go' toast.
+ * - If issues exist: renders 'Diagnostic Report' modal with red ('critical') and yellow ('warning') badges.
+ * - Failsafe: locks 'Start Simulation' across the app when any 'critical' error exists.
+ */
+async function runNetworkDiagnostics({ silent = false } = {}) {
+    const diagBtn = document.getElementById('run-diagnostics-btn');
+    const labelEl = document.getElementById('run-diagnostics-label');
+
+    if (!silent && diagBtn && labelEl) {
+        diagBtn.disabled = true;
+        labelEl.textContent = 'Validating Graph…';
+    }
+
+    try {
+        const resp = await fetch('/api/v1/topology/validate', {
+            headers: authHeaders(),
+        });
+        if (!resp.ok) {
+            throw new Error(`Diagnostics endpoint returned HTTP ${resp.status}`);
+        }
+
+        const issues = await resp.json();
+        const normalizedIssues = Array.isArray(issues) ? issues : [];
+
+        syncTopologyFailsafeState(normalizedIssues);
+
+        if (!silent) {
+            if (normalizedIssues.length === 0) {
+                closeDiagnosticModal();
+                showTopologyToast('Topology Valid - System Go', 'success');
+                showMsg('✓ Topology Valid - System Go: 0 cycles, 0 lifeline orphans, and 0 capacity bottlenecks.', 'success');
+            } else {
+                openDiagnosticModal(normalizedIssues);
+            }
+        }
+        return normalizedIssues;
+    } catch (err) {
+        if (!silent) {
+            showMsg(`✕ Failed to run network diagnostics: ${err.message}`, 'error');
+        }
+        return [];
+    } finally {
+        if (!silent && diagBtn && labelEl) {
+            diagBtn.disabled = false;
+            labelEl.textContent = 'Run Network Diagnostics';
+        }
+    }
+}
+
+/**
+ * Renders and opens the Diagnostic Report modal with red badges for 'critical'
+ * errors (Orphans, Cycles) and yellow badges for 'warnings' (Bottlenecks).
+ */
+function openDiagnosticModal(issues) {
+    const backdrop = document.getElementById('diagnostic-modal-backdrop');
+    const listEl = document.getElementById('diagnostic-issues-list');
+    const critBadge = document.getElementById('diag-summary-critical');
+    const warnBadge = document.getElementById('diag-summary-warning');
+    const failsafeBanner = document.getElementById('diagnostic-failsafe-banner');
+    const timestampEl = document.getElementById('diagnostic-timestamp');
+
+    if (!backdrop || !listEl) return;
+
+    const criticalIssues = issues.filter((i) => i.level === 'critical');
+    const warningIssues = issues.filter((i) => i.level === 'warning');
+
+    if (critBadge) {
+        critBadge.textContent = `${criticalIssues.length} Critical`;
+    }
+    if (warnBadge) {
+        warnBadge.textContent = `${warningIssues.length} Warning${warningIssues.length === 1 ? '' : 's'}`;
+    }
+    if (failsafeBanner) {
+        failsafeBanner.classList.toggle('hidden', criticalIssues.length === 0);
+    }
+    if (timestampEl) {
+        timestampEl.textContent = `Diagnostic scan completed at ${new Date().toLocaleTimeString()} · ${issues.length} issue(s) detected`;
+    }
+
+    listEl.innerHTML = issues
+        .map((issue) => {
+            const isCritical = issue.level === 'critical';
+            const badgeClass = isCritical ? 'diag-badge-critical' : 'diag-badge-warning';
+            const cardClass = isCritical ? 'diag-issue-card diag-card-critical' : 'diag-issue-card diag-card-warning';
+            const badgeText = isCritical ? 'CRITICAL' : 'WARNING';
+
+            const msgText = String(issue.message || '');
+            let categoryLabel = isCritical ? 'Topological Error' : 'Capacity Bottleneck';
+            if (msgText.toLowerCase().includes('cycle') || msgText.toLowerCase().includes('deadlock')) {
+                categoryLabel = 'Cycle Deadlock';
+            } else if (msgText.toLowerCase().includes('orphan')) {
+                categoryLabel = 'Lifeline Orphan';
+            }
+
+            const matchingNode = registeredNodes.find(
+                (n) => String(n.name) === String(issue.node_id) || String(n.id) === String(issue.node_id)
+            );
+
+            return `
+                <div class="${cardClass}">
+                    <div class="diag-issue-header">
+                        <div class="diag-issue-badges">
+                            <span class="diag-badge ${badgeClass}">${badgeText}</span>
+                            <span class="diag-category-tag">${escapeHtml(categoryLabel)}</span>
+                            <span class="diag-node-chip">${escapeHtml(issue.node_id)}</span>
+                        </div>
+                        ${
+                            matchingNode
+                                ? `<button type="button" class="diag-locate-btn" data-node-id="${matchingNode.id}" title="Pan map to ${escapeHtml(matchingNode.name)}">Locate on Map</button>`
+                                : ''
+                        }
+                    </div>
+                    <p class="diag-issue-message">${escapeHtml(issue.message)}</p>
+                </div>
+            `;
+        })
+        .join('');
+
+    listEl.querySelectorAll('.diag-locate-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const id = Number(btn.dataset.nodeId);
+            const node = registeredNodes.find((n) => n.id === id);
+            if (node && map) {
+                closeDiagnosticModal();
+                map.flyTo([Number(node.y), Number(node.x)], 15, { duration: 0.65 });
+                showMsg(`Focused map on "${node.name}" (#${node.id}).`, 'info');
+            }
+        });
+    });
+
+    backdrop.classList.remove('hidden');
+}
+
+function closeDiagnosticModal() {
+    const backdrop = document.getElementById('diagnostic-modal-backdrop');
+    if (backdrop) {
+        backdrop.classList.add('hidden');
+    }
 }

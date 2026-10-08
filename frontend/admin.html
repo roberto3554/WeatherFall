@@ -10,7 +10,7 @@
     <!-- Leaflet.js via CDN -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <link rel="stylesheet" href="/static/style.css?v=11">
+    <link rel="stylesheet" href="/static/style.css?v=13">
 </head>
 <body class="admin-body">
     <header class="admin-header">
@@ -46,8 +46,11 @@
                 </svg>
                 <span id="theme-toggle-label">Light</span>
             </button>
+            <span id="admin-sim-failsafe-badge" class="admin-sim-failsafe-badge hidden" title="Start Simulation is disabled across the application due to Critical Topology Errors">
+                🔒 Start Simulation Disabled
+            </span>
             <span class="auth-user" id="admin-user">—</span>
-            <a href="/" class="auth-link">Command Map</a>
+            <a href="/" class="auth-link" id="admin-command-map-link">Command Map</a>
             <button type="button" class="auth-link" id="admin-logout-btn">Sign Out</button>
         </div>
     </header>
@@ -87,6 +90,15 @@
                         <input type="checkbox" id="osm-auto-connect" checked>
                         <span>Auto-connect imports</span>
                     </label>
+
+                    <button type="button" id="run-diagnostics-btn" class="diagnostics-btn" title="Run NetworkX Topological Integrity Validator on the live city graph">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M9 12l2 2 4-4"/>
+                            <circle cx="12" cy="12" r="10"/>
+                        </svg>
+                        <span id="run-diagnostics-label">Run Network Diagnostics</span>
+                        <span id="diagnostics-status-pill" class="diagnostics-status-pill hidden"></span>
+                    </button>
 
                     <button type="button" id="edit-mode-btn" class="edit-mode-btn" title="Toggle interactive connection drawing between registered nodes">
                         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
@@ -200,6 +212,50 @@
         </section>
     </main>
 
-    <script src="/static/admin.js?v=10"></script>
+    <!-- Floating Toast Notification (Topology Valid - System Go) -->
+    <div id="topology-toast" class="topology-toast hidden" role="status" aria-live="polite">
+        <span class="topology-toast-icon" id="topology-toast-icon">✓</span>
+        <span id="topology-toast-text">Topology Valid - System Go</span>
+    </div>
+
+    <!-- Topological Integrity Diagnostic Report Modal -->
+    <div id="diagnostic-modal-backdrop" class="diagnostic-modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="diagnostic-modal-title">
+        <div class="diagnostic-modal">
+            <div class="diagnostic-modal-header">
+                <div class="diagnostic-modal-title-group">
+                    <h2 id="diagnostic-modal-title">Diagnostic Report — Topological Integrity Validator</h2>
+                    <p class="diagnostic-modal-subtitle">NetworkX Cycle Analysis, Lifeline Orphan Detection &amp; Supplier Capacity Bottlenecks</p>
+                </div>
+                <div class="diagnostic-modal-summary">
+                    <span id="diag-summary-critical" class="diag-badge diag-badge-critical">0 Critical</span>
+                    <span id="diag-summary-warning" class="diag-badge diag-badge-warning">0 Warnings</span>
+                    <button type="button" id="diagnostic-modal-close" class="diagnostic-modal-close" aria-label="Close Diagnostic Report">&times;</button>
+                </div>
+            </div>
+
+            <!-- Failsafe Simulation Lock Alert -->
+            <div id="diagnostic-failsafe-banner" class="diagnostic-failsafe-banner hidden" role="alert">
+                <div class="diagnostic-failsafe-icon">🔒</div>
+                <div class="diagnostic-failsafe-text">
+                    <strong>FAILSAFE ENGAGED — 'Start Simulation' Disabled Across Application:</strong>
+                    Critical topological errors (circular deadlocks or missing lifeline orphans) were detected. Simulation execution and Celery worker dispatch are strictly locked until all <span class="diag-inline-critical">CRITICAL</span> errors are resolved.
+                </div>
+            </div>
+
+            <div class="diagnostic-modal-body">
+                <div id="diagnostic-issues-list" class="diagnostic-issues-list"></div>
+            </div>
+
+            <div class="diagnostic-modal-footer">
+                <span id="diagnostic-timestamp" class="diagnostic-timestamp">Validated against live cached NetworkX DiGraph</span>
+                <div class="diagnostic-modal-actions">
+                    <button type="button" id="diagnostic-rerun-btn" class="diagnostics-btn">Re-Run Network Diagnostics</button>
+                    <button type="button" id="diagnostic-dismiss-btn" class="reset-button">Close Report</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/admin.js?v=12"></script>
 </body>
 </html>
