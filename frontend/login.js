@@ -87,7 +87,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (!response.ok) {
                 const data = await response.json().catch(() => ({}));
-                throw new Error(data.detail || `Login failed (HTTP ${response.status})`);
+                throw new Error(data.detail || data.error || `Login failed (HTTP ${response.status})`);
             }
 
             const data = await response.json();

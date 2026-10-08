@@ -7,9 +7,10 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-    <link rel="stylesheet" href="/static/style.css?v=7">
+    <link rel="stylesheet" href="/static/style.css?v=10">
 </head>
 <body>
     <div class="layout-container">
@@ -67,31 +68,57 @@
 
             <div id="sidebar-body" class="sidebar-body">
                 <div class="control-group">
-                    <label for="disaster-type">Hazard Scenario</label>
-                    <select id="disaster-type">
-                        <option value="Hurricane">Hurricane</option>
-                        <option value="Coastal Storm Surge & Flash Flood">Coastal Storm Surge &amp; Flash Flood</option>
-                        <option value="Tornado Outbreak">Tornado Outbreak</option>
-                        <option value="Extreme Heatwave & Grid Brownout">Extreme Heatwave &amp; Grid Brownout</option>
+                    <div class="label-row">
+                        <label for="disaster-type">Hazard Scenario</label>
+                        <span id="hazard-category-badge" class="badge hazard-cat-badge">Meteorological</span>
+                    </div>
+                    <select id="disaster-type" aria-label="Hazard Scenario">
+                        <optgroup label="Meteorological &amp; Cyclonic">
+                            <option value="Hurricane" data-category="Meteorological">🌀 Hurricane (Tropical Cyclone)</option>
+                            <option value="Tornado Outbreak" data-category="Meteorological">🌪️ Tornado Outbreak (Supercell Swarm)</option>
+                            <option value="Severe Derecho & Lightning Storm" data-category="Meteorological">⚡ Severe Derecho &amp; Lightning Storm</option>
+                        </optgroup>
+                        <optgroup label="Seismic &amp; Geological">
+                            <option value="Earthquake" data-category="Seismic">🌍 Earthquake (Seismic Ground Shaking)</option>
+                            <option value="Karst Sinkhole Collapse" data-category="Geological">🕳️ Karst Sinkhole Collapse (Subsurface Void)</option>
+                        </optgroup>
+                        <optgroup label="Hydrological &amp; Coastal">
+                            <option value="Coastal Storm Surge & Flash Flood" data-category="Hydrological">🌊 Coastal Storm Surge &amp; Flash Flood</option>
+                            <option value="Tsunami" data-category="Hydrological">🌊 Tsunami (Seismic Sea Wave)</option>
+                            <option value="King Tide & Saltwater Intrusion" data-category="Hydrological">💧 King Tide &amp; Saltwater Intrusion</option>
+                        </optgroup>
+                        <optgroup label="Climatological &amp; Environmental">
+                            <option value="Extreme Heatwave & Grid Brownout" data-category="Climatological">🔥 Extreme Heatwave &amp; Grid Brownout</option>
+                            <option value="Everglades Wildfire & Smoke Plume" data-category="Environmental">🔥 Everglades Wildfire &amp; Ash Plume</option>
+                        </optgroup>
+                        <optgroup label="Technological &amp; Space Weather">
+                            <option value="Solar Storm / Geomagnetic EMP" data-category="Space Weather">☀️ Solar Storm / Geomagnetic EMP</option>
+                            <option value="Cyber-Physical Grid Attack" data-category="Cyber-Physical">🛡️ Cyber-Physical SCADA Grid Attack</option>
+                        </optgroup>
                     </select>
                 </div>
 
                 <div class="control-group">
-                    <label for="disaster-magnitude">Intensity &amp; Magnitude</label>
+                    <div class="label-row">
+                        <label for="disaster-magnitude-select">Intensity &amp; Magnitude</label>
+                        <span id="severity-level-badge" class="severity-badge sev-level-5">Level 5 · Catastrophic</span>
+                    </div>
+                    <div id="severity-tier-bar" class="severity-tier-bar" role="group" aria-label="Severity Level">
+                        <button type="button" class="sev-step" data-level="1" title="Level 1 — Minor / Moderate">L1</button>
+                        <button type="button" class="sev-step" data-level="2" title="Level 2 — Moderate / Strong">L2</button>
+                        <button type="button" class="sev-step" data-level="3" title="Level 3 — Major">L3</button>
+                        <button type="button" class="sev-step" data-level="4" title="Level 4 — Extreme">L4</button>
+                        <button type="button" class="sev-step active" data-level="5" title="Level 5 — Catastrophic">L5</button>
+                    </div>
+                    <select id="disaster-magnitude-select" aria-label="Preset Intensity and Magnitude"></select>
                     <input
                         type="text"
                         id="disaster-magnitude"
-                        list="magnitude-presets"
+                        class="custom-magnitude-input hidden"
                         value="Category 5 (165 mph, +4.2m surge)"
-                        placeholder="e.g. Category 5, EF-3, Water level +2.5m"
+                        placeholder="Enter custom intensity / magnitude..."
                     >
-                    <datalist id="magnitude-presets">
-                        <option value="Category 5 (165 mph, +4.2m surge)"></option>
-                        <option value="Water level +2.5m"></option>
-                        <option value="EF-3 (155 mph winds)"></option>
-                        <option value="Category 3 (120 mph, +1.8m surge)"></option>
-                        <option value="Heat Index 46°C (Peak Load 135%)"></option>
-                    </datalist>
+                    <small id="hazard-scale-hint" class="hint-text">Saffir-Simpson Hurricane Wind Scale &amp; Coastal Surge</small>
                 </div>
 
                 <div class="control-group search-group">
@@ -271,6 +298,6 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=7"></script>
+    <script src="/static/app.js?v=12"></script>
 </body>
 </html>
