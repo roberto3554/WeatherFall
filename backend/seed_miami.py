@@ -810,10 +810,11 @@ def wire_intra_sector_hierarchy(
             is_cyclic_fallback=False,
         )
 
-    # Connect Primary trunk nodes in a resilient ring along the shortest street path
+    # Connect Primary trunk nodes in a directed acyclic backbone chain along the shortest street path
     if len(primaries) >= 2:
-        for idx, p_src in enumerate(primaries):
-            p_tgt = primaries[(idx + 1) % len(primaries)]
+        for idx in range(len(primaries) - 1):
+            p_src = primaries[idx]
+            p_tgt = primaries[idx + 1]
             if p_src["name"] == p_tgt["name"] or graph.has_edge(p_src["name"], p_tgt["name"]):
                 continue
             dist_m, path_nodes = compute_street_route(
@@ -1000,13 +1001,17 @@ async def seed_miami_database() -> None:
 
             node_records: dict[str, Node] = {}
             for node_name, attrs in graph.nodes(data=True):
+                initial_cap = max(
+                    int(attrs.get("capacity", 3)),
+                    int(graph.out_degree(node_name)),
+                )
                 node_obj = Node(
                     name=str(node_name),
                     type=str(attrs.get("type", "energy")),
                     x=float(attrs.get("x", 0.0)),
                     y=float(attrs.get("y", 0.0)),
                     tier=str(attrs.get("tier", "Secondary")),
-                    capacity=int(attrs.get("capacity", 3)),
+                    capacity=initial_cap,
                     battery_backup_hours=float(attrs.get("battery_backup_hours", 24.0)),
                     social_vulnerability_index=float(attrs.get("social_vulnerability_index", 0.5)),
                     population_served=int(attrs.get("population_served", 25000)),

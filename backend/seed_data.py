@@ -94,7 +94,6 @@ MIAMI_NODES: list[dict[str, Any]] = [
 MIAMI_EDGES: list[tuple[str, str]] = [
     # Power Grid Hierarchy (Energy -> Energy)
     ("Turkey Point Nuclear Generating Station", "FPL Dania Beach Clean Energy Center"),
-    ("FPL Dania Beach Clean Energy Center", "Turkey Point Nuclear Generating Station"),
     ("Turkey Point Nuclear Generating Station", "Downtown Miami Substation"),
     ("Turkey Point Nuclear Generating Station", "Brickell Underground Vault Substation"),
     ("FPL Dania Beach Clean Energy Center", "Downtown Miami Substation"),
