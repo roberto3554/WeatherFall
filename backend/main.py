@@ -1,6 +1,7 @@
 from collections import deque
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+import heapq
 import json
 import os
 import math
@@ -21,7 +22,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 try:
-    from .agent import determine_epicenter, evaluate_node_failure
+    from .agent import (
+        compute_realistic_recovery_metrics,
+        compute_required_crews,
+        determine_epicenter,
+        evaluate_batch_failures,
+        evaluate_node_failure,
+        format_recovery_duration,
+    )
     from .auth import (
         create_access_token,
         get_current_user,
@@ -34,19 +42,30 @@ try:
     from .schemas import (
         EdgeCreate,
         EdgeResponse,
+        Event,
         NodeCreate,
         NodeResponse,
         NodeState,
         NodeUpdate,
+        SimulationDispatchResponse,
         SimulationRequest,
+        SimulationStatusResponse,
         Token,
         UserCreate,
         UserLogin,
         UserResponse,
     )
     from .seed_data import MIAMI_EDGES, MIAMI_NODES
+    from .worker import dispatch_simulation_task, get_simulation_task_status
 except ImportError:
-    from agent import determine_epicenter, evaluate_node_failure
+    from agent import (
+        compute_realistic_recovery_metrics,
+        compute_required_crews,
+        determine_epicenter,
+        evaluate_batch_failures,
+        evaluate_node_failure,
+        format_recovery_duration,
+    )
     from auth import (
         create_access_token,
         get_current_user,
@@ -59,17 +78,21 @@ except ImportError:
     from schemas import (
         EdgeCreate,
         EdgeResponse,
+        Event,
         NodeCreate,
         NodeResponse,
         NodeState,
         NodeUpdate,
+        SimulationDispatchResponse,
         SimulationRequest,
+        SimulationStatusResponse,
         Token,
         UserCreate,
         UserLogin,
         UserResponse,
     )
     from seed_data import MIAMI_EDGES, MIAMI_NODES
+    from worker import dispatch_simulation_task, get_simulation_task_status
 
 
 def get_real_client_ip(request: Request) -> str:
@@ -121,7 +144,7 @@ async def ensure_default_admin() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """Ensure database tables and hierarchical capacity columns exist on startup."""
+    """Ensure database tables, hierarchical capacity columns, and Climate Justice SVI/population columns exist on startup."""
     try:
         await init_db()
         from sqlalchemy import text
@@ -134,6 +157,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             await conn.execute(text("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS capacity INTEGER DEFAULT 3;"))
             await conn.execute(
                 text("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS battery_backup_hours DOUBLE PRECISION DEFAULT 24.0;")
+            )
+            await conn.execute(
+                text("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS social_vulnerability_index DOUBLE PRECISION DEFAULT 0.5;")
+            )
+            await conn.execute(
+                text("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS population_served INTEGER DEFAULT 25000;")
             )
     except Exception:
         pass
@@ -150,7 +179,7 @@ FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 app = FastAPI(
     title="WeatherFall API",
     description="AI-driven climate risk cascade simulation API (Miami Infrastructure Edition).",
-    version="1.5.0",
+    version="1.6.0",
     lifespan=lifespan,
 )
 
@@ -173,15 +202,24 @@ app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 _TOPOLOGY_CACHE: nx.DiGraph | None = None
 
 # Task 2: Realistic Directed Interdependency Matrix
-#   • energy MUST supply EVERYTHING (water, comms, transport, health)
-#   • water MUST supply health
-#   • transport MUST supply health (ambulance access) AND energy (fuel delivery for substation backup generators)
+#   • Hospitals (health) MUST receive electricity (energy), water (water), and communications (comms)
+#   • Electricity plants/substations (energy) ONLY need other electricity plants (energy -> energy)
+#     in order to supply downstream facilities and residential neighborhoods
+#   • Water, Comms, and Transport facilities receive electricity from energy plants/substations
 MANDATORY_INCOMING_LIFELINES: dict[str, tuple[str, ...]] = {
-    "health": ("energy", "water", "transport"),
+    "health": ("energy", "water", "comms"),
+    "energy": ("energy",),
     "water": ("energy",),
     "comms": ("energy",),
     "transport": ("energy",),
-    "energy": ("transport",),
+}
+
+ALLOWED_INCOMING_TYPES_BY_TARGET: dict[str, set[str]] = {
+    "health": {"energy", "water", "comms"},
+    "energy": {"energy"},
+    "water": {"energy", "water"},
+    "comms": {"energy", "comms"},
+    "transport": {"energy", "transport"},
 }
 
 
@@ -197,6 +235,8 @@ def _infer_node_hierarchy(node_name: str, node_type: str) -> tuple[str, int, flo
     """
     Infers (tier, capacity, battery_backup_hours) for a node based on its facility
     sector and name when not explicitly specified.
+    `battery_backup_hours` represents emergency UPS/battery backup endurance (in hours)
+    used by the Discrete Event Simulation (DES) before full node collapse.
     """
     ntype = _normalize_sector_type(node_type)
     nlower = node_name.lower()
@@ -205,18 +245,43 @@ def _infer_node_hierarchy(node_name: str, node_type: str) -> tuple[str, int, flo
         is_primary = any(
             k in nlower for k in ("miami substation", "flagami", "levee", "davis", "culmer", "railway", "nuclear", "clean energy")
         )
-        return ("Primary", 6, 72.0) if is_primary else ("Secondary", 2, 24.0)
+        return ("Primary", 6, 4.0) if is_primary else ("Secondary", 2, 2.5)
     if ntype == "water":
         is_primary = any(k in nlower for k in ("plant", "treatment", "central district", "alexander orr", "virginia key"))
-        return ("Primary", 5, 48.0) if is_primary else ("Secondary", 2, 16.0)
+        return ("Primary", 5, 3.5) if is_primary else ("Secondary", 2, 2.0)
     if ntype == "health":
         is_primary = any(k in nlower for k in ("jackson memorial", "mercy", "mount sinai", "baptist", "university", "trauma", "medical center"))
-        return ("Primary", 2, 48.0) if is_primary else ("Secondary", 1, 24.0)
+        return ("Primary", 2, 4.5) if is_primary else ("Secondary", 1, 3.0)
     if ntype == "transport":
         is_primary = any(k in nlower for k in ("port", "airport", "central", "government center", "intermodal", "hub", "terminal", "dadeland"))
-        return ("Primary", 5, 36.0) if is_primary else ("Secondary", 2, 12.0)
+        return ("Primary", 5, 3.0) if is_primary else ("Secondary", 2, 1.5)
     is_primary = any(k in nlower for k in ("nap", "equinix", "coresite", "downtown", "central"))
-    return ("Primary", 5, 48.0) if is_primary else ("Secondary", 2, 16.0)
+    return ("Primary", 5, 4.0) if is_primary else ("Secondary", 2, 2.2)
+
+
+def _infer_node_demographics(
+    node_name: str,
+    node_type: str,
+    tier: str,
+    lon: float,
+    lat: float,
+) -> tuple[float, int]:
+    """
+    Task 1: Procedurally computes `(social_vulnerability_index, population_served)`
+    based on node type, infrastructure tier, and geographic clustering in Miami.
+    """
+    try:
+        from .seed_miami import compute_demographic_profile
+    except ImportError:
+        from seed_miami import compute_demographic_profile
+
+    return compute_demographic_profile(
+        name=node_name,
+        node_type=node_type,
+        tier=tier,
+        lon=lon,
+        lat=lat,
+    )
 
 
 def invalidate_topology_cache() -> None:
@@ -226,19 +291,25 @@ def invalidate_topology_cache() -> None:
 
 
 def build_base_infrastructure_graph() -> nx.DiGraph:
-    """Initializes a static NetworkX DiGraph of Miami infrastructure."""
+    """Initializes a static NetworkX DiGraph of Miami infrastructure with SVI and population_served."""
     graph = nx.DiGraph()
     for item in MIAMI_NODES:
         ntype = _normalize_sector_type(item["type"])
         tier, cap, backup_h = _infer_node_hierarchy(item["name"], ntype)
+        lon_val = float(item.get("x", -80.205))
+        lat_val = float(item.get("y", 25.778))
+        svi_val, pop_val = _infer_node_demographics(item["name"], ntype, tier, lon_val, lat_val)
         graph.add_node(
             item["name"],
             type=ntype,
-            x=item["x"],
-            y=item["y"],
+            x=lon_val,
+            y=lat_val,
             tier=tier,
             capacity=cap,
             battery_backup_hours=backup_h,
+            social_vulnerability_index=svi_val,
+            svi_score=svi_val,
+            population_served=pop_val,
         )
     graph.add_edges_from(MIAMI_EDGES)
     return graph
@@ -251,8 +322,8 @@ async def _ensure_mandatory_topology_lifelines(
 ) -> list[Edge]:
     """
     Tasks 1, 2 & 3: Ensures every node in PostgreSQL has hierarchical tier/capacity/backup
-    attributes and satisfies the Realistic Interdependency Matrix using capacity-aware
-    assignment (`nx.min_cost_flow` logic) so no Secondary node is overloaded.
+    and Climate Justice demographic attributes (`social_vulnerability_index`, `population_served`),
+    and satisfies the Realistic Interdependency Matrix.
     """
     if not db_nodes:
         return db_edges
@@ -266,21 +337,52 @@ async def _ensure_mandatory_topology_lifelines(
         ntype = _normalize_sector_type(n.type)
         nodes_by_type.setdefault(ntype, []).append(n)
         tier_inf, cap_inf, backup_inf = _infer_node_hierarchy(n.name, ntype)
-        if not n.tier or (n.tier == "Secondary" and n.capacity == 3):
+        if not n.tier or (n.tier == "Secondary" and n.capacity == 3) or float(n.battery_backup_hours or 0.0) > 8.0:
             n.tier = tier_inf
             n.capacity = cap_inf
             n.battery_backup_hours = backup_inf
             nodes_updated = True
 
+        svi_inf, pop_inf = _infer_node_demographics(
+            node_name=n.name,
+            node_type=ntype,
+            tier=str(n.tier or tier_inf),
+            lon=float(n.x if n.x is not None else -80.205),
+            lat=float(n.y if n.y is not None else 25.778),
+        )
+        if (
+            n.social_vulnerability_index is None
+            or n.population_served is None
+            or (abs(float(n.social_vulnerability_index) - 0.5) < 1e-6 and int(n.population_served) == 25000)
+        ):
+            n.social_vulnerability_index = svi_inf
+            n.population_served = pop_inf
+            nodes_updated = True
+
     incoming_types_by_target: dict[int, set[str]] = {n.id: set() for n in db_nodes}
     existing_pairs: set[tuple[int, int]] = set()
+    valid_edges: list[Edge] = []
+    removed_invalid_edges = False
+
     for edge in db_edges:
+        src_node = nodes_by_id.get(edge.source_node_id)
+        tgt_node = nodes_by_id.get(edge.target_node_id)
+        if not src_node or not tgt_node:
+            continue
+        src_type = _normalize_sector_type(src_node.type)
+        tgt_type = _normalize_sector_type(tgt_node.type)
+        allowed_src_types = ALLOWED_INCOMING_TYPES_BY_TARGET.get(tgt_type)
+        if allowed_src_types is not None and src_type not in allowed_src_types:
+            await db.delete(edge)
+            removed_invalid_edges = True
+            continue
+
+        valid_edges.append(edge)
         existing_pairs.add((edge.source_node_id, edge.target_node_id))
         out_degree_by_id[edge.source_node_id] = out_degree_by_id.get(edge.source_node_id, 0) + 1
-        src_node = nodes_by_id.get(edge.source_node_id)
-        if src_node and edge.target_node_id in incoming_types_by_target:
-            incoming_types_by_target[edge.target_node_id].add(_normalize_sector_type(src_node.type))
+        incoming_types_by_target[edge.target_node_id].add(src_type)
 
+    db_edges = valid_edges
     added_edges: list[Edge] = []
     for target_node in db_nodes:
         target_type = _normalize_sector_type(target_node.type)
@@ -318,7 +420,39 @@ async def _ensure_mandatory_topology_lifelines(
             out_degree_by_id[best_source.id] = out_degree_by_id.get(best_source.id, 0) + 1
             current_incoming.add(req_type)
 
-    if added_edges or nodes_updated:
+    # Also ensure every supplier facility (energy, water, comms) supplies at least one valid downstream consumer
+    downstream_targets_by_supplier: dict[str, tuple[str, ...]] = {
+        "energy": ("health", "water", "comms", "transport", "energy"),
+        "water": ("health",),
+        "comms": ("health",),
+    }
+    for sup_node in db_nodes:
+        sup_type = _normalize_sector_type(sup_node.type)
+        allowed_target_types = downstream_targets_by_supplier.get(sup_type)
+        if not allowed_target_types or out_degree_by_id.get(sup_node.id, 0) > 0:
+            continue
+        possible_targets = [
+            t for t in db_nodes
+            if t.id != sup_node.id
+            and _normalize_sector_type(t.type) in allowed_target_types
+            and (sup_node.id, t.id) not in existing_pairs
+        ]
+        if not possible_targets:
+            continue
+        best_target = min(possible_targets, key=lambda t: _euclid(sup_node, t))
+        dist_m, path_nodes = _compute_street_distance_between_nodes(sup_node, best_target)
+        new_edge = Edge(
+            source_node_id=sup_node.id,
+            target_node_id=best_target.id,
+            routing_distance=dist_m,
+            path_nodes=path_nodes,
+        )
+        db.add(new_edge)
+        added_edges.append(new_edge)
+        existing_pairs.add((sup_node.id, best_target.id))
+        out_degree_by_id[sup_node.id] = out_degree_by_id.get(sup_node.id, 0) + 1
+
+    if added_edges or nodes_updated or removed_invalid_edges:
         try:
             await db.commit()
             for e in added_edges:
@@ -354,15 +488,24 @@ async def load_infrastructure_graph(db: AsyncSession, force_reload: bool = False
             norm_type = _normalize_sector_type(node.type)
             id_to_name[node.id] = node.name
             id_to_type[node.id] = norm_type
+            lon_val = float(node.x if node.x is not None else -80.205)
+            lat_val = float(node.y if node.y is not None else 25.778)
+            tier_val = node.tier or "Secondary"
+            svi_inf, pop_inf = _infer_node_demographics(node.name, norm_type, tier_val, lon_val, lat_val)
+            svi_val = float(node.social_vulnerability_index if node.social_vulnerability_index is not None else svi_inf)
+            pop_val = int(node.population_served if node.population_served is not None else pop_inf)
             graph.add_node(
                 node.name,
                 id=node.id,
                 type=norm_type,
-                x=node.x if node.x is not None else 0.0,
-                y=node.y if node.y is not None else 0.0,
-                tier=node.tier or "Secondary",
+                x=lon_val,
+                y=lat_val,
+                tier=tier_val,
                 capacity=int(node.capacity or 3),
                 battery_backup_hours=float(node.battery_backup_hours or 24.0),
+                social_vulnerability_index=svi_val,
+                svi_score=svi_val,
+                population_served=pop_val,
             )
 
         for edge in db_edges:
@@ -480,7 +623,7 @@ async def get_topology(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, list[dict[str, Any]]]:
-    """Returns the city infrastructure graph (nodes with x/y, tier, capacity, backup hours, and directed edges)."""
+    """Returns the city infrastructure graph (nodes with x/y, tier, capacity, backup hours, SVI, population, and directed edges)."""
     graph = await load_infrastructure_graph(db)
 
     nodes_list = [
@@ -496,6 +639,9 @@ async def get_topology(
             "tier": str(data.get("tier", "Secondary")),
             "capacity": int(data.get("capacity", 3)),
             "battery_backup_hours": float(data.get("battery_backup_hours", 24.0)),
+            "social_vulnerability_index": float(data.get("social_vulnerability_index", 0.5)),
+            "svi_score": float(data.get("svi_score", data.get("social_vulnerability_index", 0.5))),
+            "population_served": int(data.get("population_served", 25000)),
         }
         for node, data in graph.nodes(data=True)
     ]
@@ -553,9 +699,9 @@ def _compute_street_distance_between_nodes(source_node: Node, target_node: Node)
 async def _auto_connect_node(db: AsyncSession, new_node: Node) -> None:
     """
     Task 1: Connect the new node enforcing strict multi-dependency rules:
-      • health node             → incoming edges from nearest energy node AND nearest water node
+      • health node             → incoming edges from nearest energy, water, AND comms nodes
       • water / comms / transp. → incoming edge from nearest energy node
-      • energy node             → outgoing edge to nearest non-energy node
+      • energy node             → incoming edge from nearest energy node AND outgoing edge to nearest downstream facility
     """
     result = await db.execute(select(Node).where(Node.id != new_node.id))
     others = list(result.scalars().all())
@@ -566,8 +712,12 @@ async def _auto_connect_node(db: AsyncSession, new_node: Node) -> None:
     pairs_to_create: list[tuple[Node, Node]] = []
 
     if node_type == "energy":
-        candidates = [n for n in others if _normalize_sector_type(n.type) != "energy"] or others
-        target = min(candidates, key=lambda n: _euclid(new_node, n))
+        energy_peers = [n for n in others if _normalize_sector_type(n.type) == "energy"]
+        if energy_peers:
+            upstream_energy = min(energy_peers, key=lambda n: _euclid(new_node, n))
+            pairs_to_create.append((upstream_energy, new_node))
+        downstream_candidates = [n for n in others if _normalize_sector_type(n.type) != "energy"] or others
+        target = min(downstream_candidates, key=lambda n: _euclid(new_node, n))
         pairs_to_create.append((new_node, target))
     else:
         required_types = MANDATORY_INCOMING_LIFELINES.get(node_type, ("energy",))
@@ -577,7 +727,8 @@ async def _auto_connect_node(db: AsyncSession, new_node: Node) -> None:
                 source = min(typed_candidates, key=lambda n: _euclid(new_node, n))
                 pairs_to_create.append((source, new_node))
         if not pairs_to_create:
-            source = min(others, key=lambda n: _euclid(new_node, n))
+            energy_candidates = [n for n in others if _normalize_sector_type(n.type) == "energy"] or others
+            source = min(energy_candidates, key=lambda n: _euclid(new_node, n))
             pairs_to_create.append((source, new_node))
 
     for source_node, target_node in pairs_to_create:
@@ -1111,14 +1262,17 @@ def _get_viable_candidates(
     parent_name: str,
     failed_nodes: set[str],
     missing_dependency_type: str | None = None,
+    node_type: str = "energy",
+    magnitude: str = "Category 5",
+    route_path_nodes: int = 0,
     limit: int = 3,
 ) -> list[dict[str, Any]]:
     """
-    Task 3: When a node loses a specific supply (e.g., a hospital loses 'water'),
-    filters `candidate_nodes` passed to the AI to ONLY include alive nodes of that
-    exact missing type (`missing_dependency_type`), providing the exact physical
-    distance (in meters) to each candidate using the OSM street grid data, sorted
-    ascending by shortest physical distance.
+    Filters `candidate_nodes` passed to the AI to ONLY include `ONLINE` nodes of the
+    exact missing type (`missing_dependency_type`), pre-calculating physical OSM street
+    distance (`distance_m`), repair cost (`cost` / `estimated_cost`), required repair crews
+    (`crews_used`), and Field Restoration Time in minutes (`recovery_time_ms`) and hours
+    (`field_restoration_hours`), sorted ascending by shortest physical distance.
     """
     if missing_dependency_type:
         required_type = _normalize_sector_type(missing_dependency_type)
@@ -1137,7 +1291,23 @@ def _get_viable_candidates(
         if cand_type != required_type:
             continue
 
+        cand_tier = str(data.get("tier", "Primary"))
         dist_m = _estimate_osm_street_distance_m(graph, undirected_graph, cand_name, child_name)
+        est_cost, rec_min, rec_display = compute_realistic_recovery_metrics(
+            distance_m=dist_m,
+            node_type=node_type,
+            missing_dependency_type=required_type,
+            magnitude=magnitude,
+            route_path_nodes=route_path_nodes,
+            candidate_tier=cand_tier,
+        )
+        crews_req = compute_required_crews(
+            distance_m=dist_m,
+            node_type=node_type,
+            missing_dependency_type=required_type,
+            magnitude=magnitude,
+        )
+        restoration_hours = round(rec_min / 60.0, 2)
         scored_candidates.append(
             (
                 dist_m,
@@ -1146,7 +1316,15 @@ def _get_viable_candidates(
                     "id": cand_name,
                     "name": cand_name,
                     "type": cand_type,
+                    "tier": cand_tier,
                     "distance_m": dist_m,
+                    "cost": est_cost,
+                    "estimated_cost": est_cost,
+                    "crews_used": crews_req,
+                    "required_crew_time_min": rec_min,
+                    "recovery_time_ms": rec_min,
+                    "field_restoration_hours": restoration_hours,
+                    "recovery_time_display": rec_display,
                 },
             )
         )
@@ -1162,10 +1340,9 @@ def _has_severed_critical_lifeline(
     failed_nodes: set[str],
 ) -> tuple[bool, str]:
     """
-    Task 1: Determines whether `node_name` enters the 'failing' state because ANY of
-    its critical dependency lifelines (energy or water, depending on its type) have
-    been severed by `failed_parent` or upstream cascade failures.
-    Returns (is_failing, missing_dependency_type).
+    Determines whether `node_name` loses a critical dependency lifeline (`energy`, `water`,
+    or `comms`, depending on its type) when `failed_parent` transitions to `OFFLINE`.
+    Returns `(is_severed, missing_dependency_type)`.
     """
     node_type = _normalize_sector_type(graph.nodes[node_name].get("type", "energy"))
     parent_type = (
@@ -1175,12 +1352,9 @@ def _has_severed_critical_lifeline(
     )
     required_lifelines = set(MANDATORY_INCOMING_LIFELINES.get(node_type, ("energy",)))
 
-    # If the failed parent is directly one of the node's critical lifelines (e.g. energy or water for health),
-    # that lifeline is immediately severed.
     if parent_type in required_lifelines:
         return True, parent_type
 
-    # Also check if any required lifeline type has all its incoming suppliers in failed_nodes
     for req_type in required_lifelines:
         typed_preds = [
             pred for pred in graph.predecessors(node_name)
@@ -1189,261 +1363,72 @@ def _has_severed_critical_lifeline(
         if typed_preds and all(pred in failed_nodes for pred in typed_preds):
             return True, req_type
 
-    return True, parent_type
+    return False, parent_type
 
 
-@app.post("/api/v1/simulate", response_model=list[NodeState])
+def _compute_knapsack_capacity_value(graph: nx.DiGraph, node_name: str, node_type: str) -> int:
+    """
+    Computes the effective infrastructure capacity weight of `node_name` for the
+    Knapsack objective ('Maximize the infrastructure capacity saved'), accounting
+    for raw facility capacity, Primary/Secondary tier, life-safety criticality
+    (Hospitals), and downstream dependent facilities.
+    """
+    data = graph.nodes.get(node_name, {})
+    base_cap = int(data.get("capacity", 3))
+    tier = str(data.get("tier", "Secondary"))
+    downstream_count = min(4, int(graph.out_degree(node_name)))
+    if node_type == "health":
+        sector_bonus = 18 if tier == "Primary" else 14
+    elif tier == "Primary":
+        sector_bonus = 6
+    else:
+        sector_bonus = 2
+    return max(1, base_cap + sector_bonus + downstream_count)
+
+
+@app.post("/api/v1/simulate", response_model=SimulationDispatchResponse)
 @limiter.limit("3/minute")
 async def simulate_cascade(
     request: Request,
     sim_request: SimulationRequest,
     db: AsyncSession = Depends(get_db),
-) -> list[dict[str, Any]]:
-    """Run the AI-driven cascade simulation and return the execution trace."""
-    graph: nx.DiGraph = await load_infrastructure_graph(db)
-    disaster_type: str = sim_request.disaster_type
-    magnitude: str = sim_request.magnitude
-    disaster_direction: str = (sim_request.disaster_direction or sim_request.trajectory or "Coastal").strip()
-    trajectory: str = (sim_request.trajectory or sim_request.disaster_direction or "Coastal").strip()
+) -> dict[str, str]:
+    """
+    Task 1: Dispatches the Discrete Event Simulation (DES) + Climate Justice Knapsack
+    engine to the Celery + Redis background task queue (`backend/worker.py`) and returns
+    immediately with `{"task_id": "...", "status": "processing"}` to prevent HTTP timeouts.
+    """
+    # Ensure topology is initialized in PostgreSQL before worker reads it
+    await load_infrastructure_graph(db)
 
-    nodes_list: list[dict[str, Any]] = [
-        {
-            "id": str(node),
-            "name": str(node),
-            "type": _normalize_sector_type(data.get("type", "unknown")),
-            "x": round(float(data.get("x", 0.0)), 5),
-            "y": round(float(data.get("y", 0.0)), 5),
-        }
-        for node, data in graph.nodes(data=True)
-    ]
+    sim_payload: dict[str, Any] = {
+        "disaster_type": sim_request.disaster_type,
+        "magnitude": sim_request.magnitude,
+        "disaster_direction": (sim_request.disaster_direction or sim_request.trajectory or "Coastal").strip(),
+        "trajectory": (sim_request.trajectory or sim_request.disaster_direction or "Coastal").strip(),
+        "emergency_budget": float(sim_request.emergency_budget),
+        "active_repair_crews": int(sim_request.active_repair_crews),
+    }
+    return await dispatch_simulation_task(sim_payload)
 
-    try:
-        epicenter_eval = await determine_epicenter(
-            disaster_type=disaster_type,
-            magnitude=magnitude,
-            trajectory=trajectory,
-            available_nodes=nodes_list,
+
+@app.get("/api/v1/simulate/{task_id}", response_model=SimulationStatusResponse)
+@limiter.limit("120/minute")
+async def get_simulation_status(
+    request: Request,
+    task_id: str,
+) -> dict[str, Any]:
+    """
+    Task 1: Polls the status of an asynchronous simulation task (`task_id`) from Celery/Redis
+    and returns the final JSON `execution_trace` (`result`) once complete.
+    """
+    status_payload = await get_simulation_task_status(task_id)
+    if status_payload.get("status") == "failed":
+        raise HTTPException(
+            status_code=500,
+            detail=str(status_payload.get("error") or "Simulation background task failed."),
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    chosen_id: str = epicenter_eval["epicenter_id"]
-    llm_reasoning: str = epicenter_eval["reasoning"]
-
-    if chosen_id not in graph:
-        chosen_id = next(iter(graph.nodes))
-
-    undirected_graph = graph.to_undirected()
-    bfs_queue: deque[str] = deque([chosen_id])
-    evaluated_lifelines: set[tuple[str, str]] = set()
-    failed_nodes: set[str] = {chosen_id}
-
-    epicenter_type = _normalize_sector_type(graph.nodes[chosen_id].get("type", "unknown"))
-    execution_trace: list[dict[str, Any]] = [
-        {
-            "step": "impact",
-            "node": chosen_id,
-            "parent_node": None,
-            "child_node": chosen_id,
-            "node_name": chosen_id,
-            "node_type": epicenter_type,
-            "magnitude": magnitude,
-            "status": False,
-            "reasoning": llm_reasoning,
-            "recovery_command": None,
-            "estimated_cost": None,
-            "recovery_time_ms": None,
-            "new_edge": None,
-        }
-    ]
-
-    while bfs_queue:
-        parent_name = bfs_queue.popleft()
-
-        neighbors = list(graph.successors(parent_name))
-        if not neighbors and parent_name == chosen_id:
-            neighbors = list(graph.predecessors(parent_name))
-
-        for child_name in neighbors:
-            if child_name == chosen_id:
-                continue
-
-            is_failing, missing_dependency_type = _has_severed_critical_lifeline(
-                graph=graph,
-                node_name=child_name,
-                failed_parent=parent_name,
-                failed_nodes=failed_nodes,
-            )
-            if not is_failing:
-                continue
-
-            lifeline_key = (child_name, missing_dependency_type)
-            if lifeline_key in evaluated_lifelines:
-                continue
-            evaluated_lifelines.add(lifeline_key)
-
-            child_type = _normalize_sector_type(graph.nodes[child_name].get("type", "unknown"))
-            edge_data = (
-                graph.get_edge_data(parent_name, child_name)
-                or graph.get_edge_data(child_name, parent_name)
-                or {}
-            )
-            raw_distance = edge_data.get("routing_distance")
-            route_distance = (
-                round(float(raw_distance), 2)
-                if raw_distance is not None
-                else _estimate_osm_street_distance_m(graph, undirected_graph, parent_name, child_name)
-            )
-            raw_path_nodes = edge_data.get("path_nodes")
-            route_path_nodes = len(raw_path_nodes) if isinstance(raw_path_nodes, list) else 0
-
-            # Task 3: Filter candidate_nodes to ONLY alive nodes of the exact missing_dependency_type
-            candidate_nodes = _get_viable_candidates(
-                graph=graph,
-                undirected_graph=undirected_graph,
-                child_name=child_name,
-                parent_name=parent_name,
-                failed_nodes=failed_nodes,
-                missing_dependency_type=missing_dependency_type,
-                limit=3,
-            )
-
-            try:
-                evaluation = await evaluate_node_failure(
-                    node_name=child_name,
-                    node_type=child_type,
-                    parent_name=parent_name,
-                    disaster_type=disaster_type,
-                    magnitude=magnitude,
-                    disaster_direction=disaster_direction,
-                    missing_dependency_type=missing_dependency_type,
-                    route_distance=route_distance,
-                    route_path_nodes=route_path_nodes,
-                    candidate_nodes=candidate_nodes,
-                )
-            except ValueError as exc:
-                raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-            child_status = bool(evaluation["status"])
-            reasoning = str(evaluation["reasoning"])
-            recovery_command: str | None = evaluation.get("recovery_command")
-            raw_new_edge = evaluation.get("new_edge")
-            validated_new_edge: dict[str, Any] | None = None
-            step_cost: int | None = None
-            step_time_ms: int | None = None
-
-            if child_status is False:
-                failed_nodes.add(child_name)
-
-            if isinstance(raw_new_edge, dict) and candidate_nodes:
-                raw_source = raw_new_edge.get("source")
-                target_node = str(raw_new_edge.get("target") or child_name)
-                resolved_source: str | None = None
-
-                if isinstance(raw_source, str):
-                    if raw_source in graph:
-                        resolved_source = raw_source
-                    else:
-                        norm_raw = "".join(ch for ch in raw_source.lower() if ch.isalnum())
-                        for candidate in graph.nodes:
-                            norm_cand = "".join(ch for ch in str(candidate).lower() if ch.isalnum())
-                            if norm_raw and (
-                                norm_cand == norm_raw
-                                or norm_raw in norm_cand
-                                or norm_cand in norm_raw
-                            ):
-                                resolved_source = str(candidate)
-                                break
-
-                # Strictly enforce that the chosen recovery source is alive AND matches missing_dependency_type
-                if (
-                    resolved_source is None
-                    or resolved_source not in graph
-                    or resolved_source in failed_nodes
-                    or resolved_source == target_node
-                    or _normalize_sector_type(graph.nodes[resolved_source].get("type")) != missing_dependency_type
-                ):
-                    resolved_source = str(candidate_nodes[0]["id"])
-
-                if (
-                    resolved_source is not None
-                    and resolved_source in graph
-                    and resolved_source not in failed_nodes
-                    and resolved_source != target_node
-                    and _normalize_sector_type(graph.nodes[resolved_source].get("type")) == missing_dependency_type
-                ):
-                    chosen_dist_m = _estimate_osm_street_distance_m(
-                        graph, undirected_graph, resolved_source, target_node
-                    )
-                    default_cost = max(5000, int(round(chosen_dist_m * 6.5)))
-                    default_latency = max(25, int(round(chosen_dist_m * 0.045)))
-
-                    try:
-                        est_cost = int(
-                            float(raw_new_edge.get("estimated_cost", evaluation.get("estimated_cost", default_cost)))
-                        )
-                    except (TypeError, ValueError):
-                        est_cost = default_cost
-
-                    try:
-                        rec_time = int(
-                            float(
-                                raw_new_edge.get("recovery_time_ms", evaluation.get("recovery_time_ms", default_latency))
-                            )
-                        )
-                    except (TypeError, ValueError):
-                        rec_time = default_latency
-
-                    graph.add_edge(
-                        resolved_source,
-                        target_node,
-                        dependency_type=missing_dependency_type,
-                        routing_distance=chosen_dist_m,
-                    )
-                    validated_new_edge = {
-                        "source": resolved_source,
-                        "target": target_node,
-                        "estimated_cost": est_cost,
-                        "recovery_time_ms": rec_time,
-                    }
-                    step_cost = est_cost
-                    step_time_ms = rec_time
-
-            execution_trace.append(
-                {
-                    "step": "cascade",
-                    "node": child_name,
-                    "parent_node": parent_name,
-                    "child_node": child_name,
-                    "node_name": child_name,
-                    "node_type": child_type,
-                    "magnitude": magnitude,
-                    "status": child_status,
-                    "reasoning": reasoning,
-                    "recovery_command": recovery_command if validated_new_edge or recovery_command else None,
-                    "estimated_cost": step_cost,
-                    "recovery_time_ms": step_time_ms,
-                    "new_edge": validated_new_edge,
-                }
-            )
-
-            if child_status is False:
-                bfs_queue.append(child_name)
-
-    try:
-        trace_record = SimulationTrace(
-            disaster_type=disaster_type,
-            magnitude=magnitude,
-            epicenter_node=chosen_id,
-            trace_data=json.loads(json.dumps(execution_trace)),
-        )
-        db.add(trace_record)
-        await db.commit()
-    except Exception as exc:
-        await db.rollback()
-        print(f"[WARNING] Failed to persist SimulationTrace to PostgreSQL: {exc}")
-
-    return execution_trace
+    return status_payload
 
 
 if __name__ == "__main__":
