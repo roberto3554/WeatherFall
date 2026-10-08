@@ -155,15 +155,17 @@ async def evaluate_node_failure(
     parent_name: str,
     disaster_type: str,
     magnitude: str = "Category 5",
+    disaster_direction: str = "Coastal",
+    missing_dependency_type: str = "energy",
     route_distance: float = 0.0,
     route_path_nodes: int = 0,
     candidate_nodes: list[dict[str, Any]] | None = None,
     available_nodes: list[Any] | None = None,
 ) -> dict[str, Any]:
     """
-    Evaluates a child infrastructure node during a disaster cascade and performs
-    multi-objective optimization (Physics latency, Cost, and Viability) across the
-    top viable candidate nodes to orchestrate self-healing rerouting.
+    Evaluates a child infrastructure node during a disaster cascade, enforcing vector
+    and magnitude structural physics thresholds and performing distance-weighted
+    self-healing recovery routing across alive candidates of the exact missing supply type.
 
     Args:
         node_name: Real-world name of the child infrastructure node being evaluated.
@@ -171,15 +173,17 @@ async def evaluate_node_failure(
         parent_name: Name of the upstream parent node that failed.
         disaster_type: Type of climate disaster driving the cascade.
         magnitude: Physical intensity/scale metric of the disaster.
+        disaster_direction: Approach vector/direction of the disaster (e.g., 'North-West', 'Coastal').
+        missing_dependency_type: Exact infrastructure type of the severed upstream lifeline (e.g., 'energy', 'water').
         route_distance: Physical street network routing distance in meters from parent.
         route_path_nodes: Number of street intersections crossed along the physical route.
-        candidate_nodes: Up to 3 viable alive candidate nodes with their types and OSM street distances.
+        candidate_nodes: Viable alive candidate nodes of the exact missing_dependency_type with OSM street distances (meters).
         available_nodes: Optional legacy fallback list of available nodes.
 
     Returns:
         A dict with keys:
         - "status" (bool, False = failed, True = survived)
-        - "reasoning" (str, explanation balancing cost, latency, and physics)
+        - "reasoning" (str, explanation based on structural physics, distance, and type matching)
         - "recovery_command" (Optional[str])
         - "estimated_cost" (Optional[int])
         - "recovery_time_ms" (Optional[int])
@@ -196,15 +200,21 @@ async def evaluate_node_failure(
     candidate_nodes_list = json.dumps(effective_candidates)
 
     system_prompt = (
-        f'You are an autonomous emergency infrastructure AI. Node "{node_name}" has failed due to a '
-        f"{disaster_type} (Magnitude: {magnitude}). You must attempt to reroute supply using ONE of the "
-        f"following available candidate nodes: {candidate_nodes_list}.\n\n"
-        f"Your decision must balance three constraints:\n\n"
-        f"Physics: Electricity and data have propagation delays over distance.\n\n"
-        f"Cost: Emergency bridging costs scale with distance and infrastructure type.\n\n"
-        f"Viability: Will the disaster's trajectory destroy this new route too?\n\n"
-        f'Return ONLY valid JSON: {{"status": false, "reasoning": "Brief explanation of why you chose this '
-        f'specific candidate balancing cost and latency.", "recovery_command": "ln -s /... /...", '
+        f"You are an autonomous emergency infrastructure AI.\n"
+        f"A {disaster_type} of Magnitude {magnitude} is hitting from the {disaster_direction}. "
+        f"You must evaluate if the physical structure of node {node_name} ({node_type}) collapses. "
+        f"Do not rely on chance; if a magnitude {magnitude} event from this vector exceeds the structural "
+        f"limits of a typical {node_type} facility, it fails.\n\n"
+        f'Node "{node_name}" ({node_type}) has lost its critical "{missing_dependency_type}" lifeline from '
+        f'upstream facility "{parent_name}".\n'
+        f"Available alive '{missing_dependency_type}' candidate nodes (with exact physical OSM street grid distance in meters): "
+        f"{candidate_nodes_list}\n\n"
+        f"To restore the severed {missing_dependency_type}, select a node from the candidate list. "
+        f"You MUST prioritize candidates with the shortest physical distance. Long distances drastically increase "
+        f"{{recovery_time_ms}} and the probability of the new route failing due to the {disaster_direction} trajectory. "
+        f"Justify your choice based on distance and type matching.\n\n"
+        f'Return ONLY valid JSON: {{"status": false, "reasoning": "Brief explanation justifying structural impact and '
+        f'why you chose this specific {missing_dependency_type} candidate based on shortest physical distance (meters) and type matching.", '
         f'"new_edge": {{"source": "chosen_candidate_id", "target": "{node_name}", '
         f'"estimated_cost": 15000, "recovery_time_ms": 120}}}}.'
     )
@@ -221,11 +231,11 @@ async def evaluate_node_failure(
             {
                 "role": "user",
                 "content": (
-                    f"Disaster: {disaster_type} (Magnitude: {magnitude}). "
-                    f'Failed upstream parent: "{parent_name}". '
+                    f"Disaster: {disaster_type} (Magnitude: {magnitude}, Direction: {disaster_direction}). "
+                    f'Failed upstream parent: "{parent_name}" (severed lifeline type: {missing_dependency_type}). '
                     f'Target node: "{node_name}" (type: {node_type}). '
                     f"Original route from parent: {route_distance} meters across {route_path_nodes} intersections. "
-                    f"Viable candidate nodes for rerouting: {candidate_nodes_list}"
+                    f"Viable '{missing_dependency_type}' candidate nodes for rerouting (with distance_m): {candidate_nodes_list}"
                 ),
             },
         ],
@@ -267,19 +277,29 @@ async def evaluate_node_failure(
                 recovery_command = str(raw_cmd) if raw_cmd else None
 
                 raw_edge = parsed.get("new_edge")
-                if isinstance(raw_edge, dict) and raw_edge.get("source"):
-                    try:
-                        est_cost = int(float(raw_edge.get("estimated_cost", parsed.get("estimated_cost", 15000))))
-                    except (TypeError, ValueError):
-                        est_cost = 15000
+                if isinstance(raw_edge, dict) and raw_edge.get("source") and effective_candidates:
+                    chosen_src = str(raw_edge["source"])
+                    cand_dist_m = 1500.0
+                    for c in effective_candidates:
+                        if isinstance(c, dict) and str(c.get("id") or c.get("name")) == chosen_src:
+                            cand_dist_m = float(c.get("distance_m", 1500.0))
+                            break
+
+                    default_cost = max(5000, int(round(cand_dist_m * 6.5)))
+                    default_latency = max(25, int(round(cand_dist_m * 0.045)))
 
                     try:
-                        rec_time = int(float(raw_edge.get("recovery_time_ms", parsed.get("recovery_time_ms", 120))))
+                        est_cost = int(float(raw_edge.get("estimated_cost", parsed.get("estimated_cost", default_cost))))
                     except (TypeError, ValueError):
-                        rec_time = 120
+                        est_cost = default_cost
+
+                    try:
+                        rec_time = int(float(raw_edge.get("recovery_time_ms", parsed.get("recovery_time_ms", default_latency))))
+                    except (TypeError, ValueError):
+                        rec_time = default_latency
 
                     new_edge = {
-                        "source": str(raw_edge["source"]),
+                        "source": chosen_src,
                         "target": str(raw_edge.get("target") or node_name),
                         "estimated_cost": est_cost,
                         "recovery_time_ms": rec_time,
@@ -303,32 +323,43 @@ async def evaluate_node_failure(
     except Exception as exc:
         print(f"[WARNING] Groq LLM evaluation failed for node '{node_name}': {exc}")
         fallback_source = None
+        fallback_dist_m = 1500.0
         if effective_candidates and isinstance(effective_candidates[0], dict):
             fallback_source = effective_candidates[0].get("id") or effective_candidates[0].get("name")
+            fallback_dist_m = float(effective_candidates[0].get("distance_m", 1500.0))
         elif effective_candidates and isinstance(effective_candidates[0], str):
             fallback_source = effective_candidates[0]
 
         if fallback_source:
+            est_cost = max(5000, int(round(fallback_dist_m * 6.5)))
+            rec_time = max(25, int(round(fallback_dist_m * 0.045)))
             return {
                 "status": False,
-                "reasoning": f"Fallback: Spatial evaluation timed out; rerouted to nearest candidate {fallback_source}.",
-                "recovery_command": f"ln -s /city/grid/{fallback_source} /city/grid/{node_name}",
-                "estimated_cost": 15000,
-                "recovery_time_ms": 120,
+                "reasoning": (
+                    f"Severed {missing_dependency_type} lifeline under {magnitude} ({disaster_direction}); "
+                    f"rerouted to shortest-distance {missing_dependency_type} candidate {fallback_source} "
+                    f"({fallback_dist_m:.0f} m)."
+                ),
+                "recovery_command": None,
+                "estimated_cost": est_cost,
+                "recovery_time_ms": rec_time,
                 "new_edge": {
                     "source": str(fallback_source),
                     "target": node_name,
-                    "estimated_cost": 15000,
-                    "recovery_time_ms": 120,
+                    "estimated_cost": est_cost,
+                    "recovery_time_ms": rec_time,
                 },
             }
 
         return {
-            "status": True,
-            "reasoning": "Fallback: Spatial evaluation timed out.",
+            "status": False,
+            "reasoning": (
+                f"Node {node_name} ({node_type}) failed due to severed {missing_dependency_type} lifeline "
+                f"and no viable {missing_dependency_type} recovery candidates remain operational."
+            ),
             "recovery_command": None,
-            "estimated_cost": 0,
-            "recovery_time_ms": 0,
+            "estimated_cost": None,
+            "recovery_time_ms": None,
             "new_edge": None,
         }
 
