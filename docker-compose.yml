@@ -29,6 +29,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-weatherfall}:${POSTGRES_PASSWORD:-weatherfall_pass}@db:5432/${POSTGRES_DB:-weatherfall_db}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-20b}
+      CARTO_API_KEY: ${CARTO_API_KEY:-}
     volumes:
       - ./backend:/app/backend
       - ./data:/app/data
