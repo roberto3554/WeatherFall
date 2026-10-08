@@ -326,6 +326,10 @@ class NodeState(BaseModel):
         default=None,
         description="Remaining global repair crews available after this step.",
     )
+    crew_release_notice: Optional[str] = Field(
+        default=None,
+        description="Explicit notice when a repair crew is released back to the pool upon RECOVERY_COMPLETED.",
+    )
     new_edge: Optional[NewEdge] = Field(default=None)
 
 
@@ -359,4 +363,35 @@ class SimulationStatusResponse(BaseModel):
     error: Optional[str] = Field(
         default=None,
         description="Error message if status is 'failed'.",
+    )
+
+
+class DiagnosticIssue(BaseModel):
+    """Single topological integrity diagnostic issue returned by validate_city_graph(G)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    level: Literal["critical", "warning"] = Field(
+        ...,
+        examples=["critical", "warning"],
+        description="Severity level: 'critical' (Cycle deadlock or Orphan) or 'warning' (Capacity bottleneck).",
+    )
+    node_id: str = Field(
+        ...,
+        examples=["Jackson Memorial Hospital", "Miami Substation"],
+        description="Identifier/name of the infrastructure node where the issue was detected.",
+    )
+    message: str = Field(
+        ...,
+        description="Human-readable diagnostic description of the cycle, orphan, or bottleneck.",
+    )
+    category: Optional[str] = Field(
+        default=None,
+        examples=["cycle", "orphan", "bottleneck"],
+        description="Diagnostic category ('cycle', 'orphan', or 'bottleneck').",
+    )
+    node_type: Optional[str] = Field(
+        default=None,
+        examples=["health", "energy", "water", "comms", "transport"],
+        description="Facility sector of the affected node.",
     )

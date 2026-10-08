@@ -40,6 +40,7 @@ try:
     from .database import AsyncSessionLocal, get_db, init_db
     from .models import Edge, Node, SimulationTrace, User
     from .schemas import (
+        DiagnosticIssue,
         EdgeCreate,
         EdgeResponse,
         Event,
@@ -56,7 +57,12 @@ try:
         UserResponse,
     )
     from .seed_data import MIAMI_EDGES, MIAMI_NODES
-    from .worker import dispatch_simulation_task, get_simulation_task_status
+    from .validator import validate_city_graph
+    from .worker import (
+        dispatch_simulation_task,
+        execute_simulation_cascade,
+        get_simulation_task_status,
+    )
 except ImportError:
     from agent import (
         compute_realistic_recovery_metrics,
@@ -76,6 +82,7 @@ except ImportError:
     from database import AsyncSessionLocal, get_db, init_db
     from models import Edge, Node, SimulationTrace, User
     from schemas import (
+        DiagnosticIssue,
         EdgeCreate,
         EdgeResponse,
         Event,
@@ -92,7 +99,12 @@ except ImportError:
         UserResponse,
     )
     from seed_data import MIAMI_EDGES, MIAMI_NODES
-    from worker import dispatch_simulation_task, get_simulation_task_status
+    from validator import validate_city_graph
+    from worker import (
+        dispatch_simulation_task,
+        execute_simulation_cascade,
+        get_simulation_task_status,
+    )
 
 
 def get_real_client_ip(request: Request) -> str:
@@ -321,9 +333,11 @@ async def _ensure_mandatory_topology_lifelines(
     db_edges: list[Edge],
 ) -> list[Edge]:
     """
-    Tasks 1, 2 & 3: Ensures every node in PostgreSQL has hierarchical tier/capacity/backup
-    and Climate Justice demographic attributes (`social_vulnerability_index`, `population_served`),
-    and satisfies the Realistic Interdependency Matrix.
+    Ensures every node in PostgreSQL has hierarchical tier/capacity/backup
+    and Climate Justice demographic attributes (`social_vulnerability_index`, `population_served`).
+    Only auto-wires baseline lifelines if `db_edges` is completely empty on initial bootstrap,
+    preserving any manual node/edge edits made in the Admin Console so `validate_city_graph`
+    can accurately inspect topological integrity.
     """
     if not db_nodes:
         return db_edges
@@ -337,7 +351,7 @@ async def _ensure_mandatory_topology_lifelines(
         ntype = _normalize_sector_type(n.type)
         nodes_by_type.setdefault(ntype, []).append(n)
         tier_inf, cap_inf, backup_inf = _infer_node_hierarchy(n.name, ntype)
-        if not n.tier or (n.tier == "Secondary" and n.capacity == 3) or float(n.battery_backup_hours or 0.0) > 8.0:
+        if not n.tier or float(n.battery_backup_hours or 0.0) > 8.0:
             n.tier = tier_inf
             n.capacity = cap_inf
             n.battery_backup_hours = backup_inf
@@ -359,33 +373,26 @@ async def _ensure_mandatory_topology_lifelines(
             n.population_served = pop_inf
             nodes_updated = True
 
+    if db_edges:
+        if nodes_updated:
+            try:
+                await db.commit()
+            except Exception:
+                await db.rollback()
+        return [
+            edge
+            for edge in db_edges
+            if edge.source_node_id in nodes_by_id and edge.target_node_id in nodes_by_id
+        ]
+
     incoming_types_by_target: dict[int, set[str]] = {n.id: set() for n in db_nodes}
     existing_pairs: set[tuple[int, int]] = set()
-    valid_edges: list[Edge] = []
-    removed_invalid_edges = False
-
-    for edge in db_edges:
-        src_node = nodes_by_id.get(edge.source_node_id)
-        tgt_node = nodes_by_id.get(edge.target_node_id)
-        if not src_node or not tgt_node:
-            continue
-        src_type = _normalize_sector_type(src_node.type)
-        tgt_type = _normalize_sector_type(tgt_node.type)
-        allowed_src_types = ALLOWED_INCOMING_TYPES_BY_TARGET.get(tgt_type)
-        if allowed_src_types is not None and src_type not in allowed_src_types:
-            await db.delete(edge)
-            removed_invalid_edges = True
-            continue
-
-        valid_edges.append(edge)
-        existing_pairs.add((edge.source_node_id, edge.target_node_id))
-        out_degree_by_id[edge.source_node_id] = out_degree_by_id.get(edge.source_node_id, 0) + 1
-        incoming_types_by_target[edge.target_node_id].add(src_type)
-
-    db_edges = valid_edges
     added_edges: list[Edge] = []
+
     for target_node in db_nodes:
         target_type = _normalize_sector_type(target_node.type)
+        if target_type == "energy":
+            continue
         required_types = MANDATORY_INCOMING_LIFELINES.get(target_type, ())
         current_incoming = incoming_types_by_target.get(target_node.id, set())
 
@@ -393,16 +400,16 @@ async def _ensure_mandatory_topology_lifelines(
             if req_type in current_incoming:
                 continue
             candidates = [
-                cand for cand in nodes_by_type.get(req_type, [])
+                cand
+                for cand in nodes_by_type.get(req_type, [])
                 if cand.id != target_node.id and (cand.id, target_node.id) not in existing_pairs
             ]
             if not candidates:
                 continue
-            # Prioritize candidates that still have available flow capacity (out_degree < capacity * 2),
-            # then Primary tier, then shortest physical distance
+
             def _score_candidate(cand: Node) -> tuple[int, int, float]:
-                cap = int(cand.capacity or (6 if cand.tier == "Primary" else 2))
-                overloaded = 1 if out_degree_by_id.get(cand.id, 0) >= cap * 2 else 0
+                cap = int(cand.capacity or (6 if cand.tier == "Primary" else 3))
+                overloaded = 1 if out_degree_by_id.get(cand.id, 0) >= cap else 0
                 tier_rank = 0 if (target_node.tier == "Primary" and cand.tier == "Primary") else 1
                 return (overloaded, tier_rank, _euclid(cand, target_node))
 
@@ -420,39 +427,7 @@ async def _ensure_mandatory_topology_lifelines(
             out_degree_by_id[best_source.id] = out_degree_by_id.get(best_source.id, 0) + 1
             current_incoming.add(req_type)
 
-    # Also ensure every supplier facility (energy, water, comms) supplies at least one valid downstream consumer
-    downstream_targets_by_supplier: dict[str, tuple[str, ...]] = {
-        "energy": ("health", "water", "comms", "transport", "energy"),
-        "water": ("health",),
-        "comms": ("health",),
-    }
-    for sup_node in db_nodes:
-        sup_type = _normalize_sector_type(sup_node.type)
-        allowed_target_types = downstream_targets_by_supplier.get(sup_type)
-        if not allowed_target_types or out_degree_by_id.get(sup_node.id, 0) > 0:
-            continue
-        possible_targets = [
-            t for t in db_nodes
-            if t.id != sup_node.id
-            and _normalize_sector_type(t.type) in allowed_target_types
-            and (sup_node.id, t.id) not in existing_pairs
-        ]
-        if not possible_targets:
-            continue
-        best_target = min(possible_targets, key=lambda t: _euclid(sup_node, t))
-        dist_m, path_nodes = _compute_street_distance_between_nodes(sup_node, best_target)
-        new_edge = Edge(
-            source_node_id=sup_node.id,
-            target_node_id=best_target.id,
-            routing_distance=dist_m,
-            path_nodes=path_nodes,
-        )
-        db.add(new_edge)
-        added_edges.append(new_edge)
-        existing_pairs.add((sup_node.id, best_target.id))
-        out_degree_by_id[sup_node.id] = out_degree_by_id.get(sup_node.id, 0) + 1
-
-    if added_edges or nodes_updated or removed_invalid_edges:
+    if added_edges or nodes_updated:
         try:
             await db.commit()
             for e in added_edges:
@@ -662,6 +637,22 @@ async def get_topology(
         for source, target, edata in graph.edges(data=True)
     ]
     return {"nodes": nodes_list, "edges": edges_list}
+
+
+@app.get("/api/v1/topology/validate", response_model=list[DiagnosticIssue])
+@limiter.limit("60/minute")
+async def validate_topology(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> list[dict[str, Any]]:
+    """
+    Task 2: Runs the Topological Integrity Validator (`validate_city_graph`) on the
+    live cached infrastructure graph and returns the array of diagnostic issues
+    (Cycle Analysis, Orphan Detection, and Bottleneck Analysis).
+    """
+    graph = await load_infrastructure_graph(db)
+    return validate_city_graph(graph)
+
 
 
 # ─── Node & Edge CRUD (admin) ────────────────────────────────────────────
@@ -1398,8 +1389,19 @@ async def simulate_cascade(
     engine to the Celery + Redis background task queue (`backend/worker.py`) and returns
     immediately with `{"task_id": "...", "status": "processing"}` to prevent HTTP timeouts.
     """
-    # Ensure topology is initialized in PostgreSQL before worker reads it
-    await load_infrastructure_graph(db)
+    # Ensure topology is initialized in PostgreSQL and passes critical integrity checks before worker dispatch
+    graph = await load_infrastructure_graph(db)
+    diagnostics = validate_city_graph(graph)
+    critical_issues = [item for item in diagnostics if item.get("level") == "critical"]
+    if critical_issues:
+        first_msg = critical_issues[0].get("message", "Critical topological error detected.")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Simulation blocked by Topological Integrity Failsafe ({len(critical_issues)} critical issue(s)): "
+                f"{first_msg}"
+            ),
+        )
 
     sim_payload: dict[str, Any] = {
         "disaster_type": sim_request.disaster_type,
