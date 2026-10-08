@@ -3,11 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WeatherFall — Admin Console</title>
+    <title>WeatherFall — GIS Infrastructure Admin Console</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css?v=7">
+    <!-- Leaflet.js via CDN -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="/static/style.css?v=9">
 </head>
 <body class="admin-body">
     <header class="admin-header">
@@ -21,7 +24,7 @@
                 </div>
                 <div>
                     <h1 class="logo">WeatherFall</h1>
-                    <span class="admin-subtitle">CRITICAL INFRASTRUCTURE ADMIN</span>
+                    <span class="admin-subtitle">GEOSPATIAL INFRASTRUCTURE &amp; TOPOLOGY CONSOLE</span>
                 </div>
             </div>
         </div>
@@ -49,86 +52,154 @@
         </div>
     </header>
 
-    <main class="admin-layout">
-        <section class="admin-panel">
-            <h2 class="panel-title">+ REGISTER NEW CRITICAL NODE</h2>
-
-            <form id="node-form" class="node-form">
-                <div class="form-row">
-                    <div class="control-group">
-                        <label for="node-name">Facility Name</label>
-                        <input
-                            type="text"
-                            id="node-name"
-                            required
-                            maxlength="120"
-                            placeholder="e.g. Miami Central Hospital"
-                            spellcheck="false"
-                        >
-                    </div>
-                </div>
-
-                <div class="form-row">
-                    <div class="control-group">
-                        <label for="node-type">Infrastructure Type</label>
-                        <select id="node-type" required>
-                            <option value="energy">Energy / Power</option>
-                            <option value="water">Water / Sanitation</option>
-                            <option value="transport">Transport / Logistics</option>
-                            <option value="health">Health / Medical</option>
-                            <option value="comms">Communications / Telecom</option>
+    <main class="admin-gis-layout">
+        <!-- Left Column: Interactive GIS Map & Live OSM Search Controls -->
+        <section class="admin-panel admin-map-panel">
+            <div class="gis-toolbar">
+                <div class="gis-search-controls">
+                    <div class="gis-control-item">
+                        <label for="osm-infra-type">Live OSM Search</label>
+                        <select id="osm-infra-type" aria-label="Infrastructure Sector Type">
+                            <option value="energy">⚡ Power / Substations (Energy)</option>
+                            <option value="water">💧 Water / Sanitation Plants</option>
+                            <option value="health">🏥 Health / Hospitals &amp; Clinics</option>
+                            <option value="transport">🚆 Transport / Stations &amp; Hubs</option>
+                            <option value="comms">📡 Communications / Telecom</option>
                         </select>
                     </div>
-                </div>
 
-                <div class="form-row two-col">
-                    <div class="control-group">
-                        <label for="node-x">X (longitude / canvas x)</label>
-                        <input type="number" step="any" id="node-x" required placeholder="-80.1918">
+                    <div class="gis-action-btns">
+                        <button type="button" class="run-button gis-btn" id="osm-search-btn">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="11" cy="11" r="8"/>
+                                <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                            </svg>
+                            Search in View
+                        </button>
+                        <button type="button" class="reset-button gis-btn-secondary" id="osm-clear-btn" title="Clear temporary OSM gray markers">
+                            Clear Candidates (<span id="osm-count">0</span>)
+                        </button>
                     </div>
-                    <div class="control-group">
-                        <label for="node-y">Y (latitude / canvas y)</label>
-                        <input type="number" step="any" id="node-y" required placeholder="25.7617">
-                    </div>
                 </div>
 
-                <div class="form-actions">
-                    <button type="submit" class="run-button" id="node-submit">Create Node</button>
-                    <button type="button" class="reset-button" id="node-reset">Clear</button>
+                <div class="gis-mode-controls">
+                    <label class="gis-checkbox-label" title="Automatically connect newly imported nodes to the nearest compatible node">
+                        <input type="checkbox" id="osm-auto-connect" checked>
+                        <span>Auto-connect imports</span>
+                    </label>
+
+                    <button type="button" id="edit-mode-btn" class="edit-mode-btn" title="Toggle interactive connection drawing between registered nodes">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="6" cy="6" r="3"/>
+                            <circle cx="18" cy="18" r="3"/>
+                            <path d="M8.59 8.59L15.42 15.42"/>
+                        </svg>
+                        <span id="edit-mode-label">Edit Connections: OFF</span>
+                    </button>
                 </div>
+            </div>
 
-                <div id="node-form-msg" class="form-msg hidden" role="status"></div>
+            <!-- Edit Mode Interactive Instruction Banner -->
+            <div id="edit-mode-banner" class="edit-mode-banner hidden" role="status">
+                <div class="edit-banner-content">
+                    <span class="edit-pulse-dot"></span>
+                    <span id="edit-mode-status-text">
+                        <strong>Connection Edit Mode Active:</strong> Click any registered node on the map to select the upstream <strong>Source</strong> facility.
+                    </span>
+                </div>
+                <button type="button" id="cancel-edit-mode-btn" class="edit-cancel-btn">Exit Edit Mode</button>
+            </div>
 
-                <p class="hint-text">
-                    New nodes are auto-connected to the nearest compatible facility in the dependency graph.
-                    Reload the map to see the update.
-                </p>
-            </form>
+            <!-- Status / Feedback Banner -->
+            <div id="node-form-msg" class="form-msg hidden" role="status"></div>
+
+            <!-- Interactive Leaflet Map Container -->
+            <div class="admin-map-container">
+                <div id="admin-map" aria-label="Miami Interactive GIS Infrastructure Map"></div>
+
+                <!-- Floating Map Legend -->
+                <div class="gis-map-legend">
+                    <span class="gis-legend-item"><i class="gis-dot gis-dot-osm"></i> OSM Candidate (Click to Import)</span>
+                    <span class="gis-legend-item"><i class="gis-dot gis-dot-energy"></i> Energy</span>
+                    <span class="gis-legend-item"><i class="gis-dot gis-dot-water"></i> Water</span>
+                    <span class="gis-legend-item"><i class="gis-dot gis-dot-health"></i> Health</span>
+                    <span class="gis-legend-item"><i class="gis-dot gis-dot-transport"></i> Transport</span>
+                    <span class="gis-legend-item"><i class="gis-dot gis-dot-comms"></i> Comms</span>
+                </div>
+            </div>
         </section>
 
-        <section class="admin-panel admin-panel-wide">
-            <h2 class="panel-title">◈ REGISTERED NODES (<span id="nodes-count">0</span>)</h2>
+        <!-- Right Column: Registered Nodes & Dependency Edges Inspector -->
+        <section class="admin-panel admin-inspector-panel">
+            <div class="inspector-tabs">
+                <button type="button" class="inspector-tab active" id="tab-btn-nodes" data-tab="nodes">
+                    Registered Nodes (<span id="nodes-count">0</span>)
+                </button>
+                <button type="button" class="inspector-tab" id="tab-btn-edges" data-tab="edges">
+                    Dependency Edges (<span id="edges-count">0</span>)
+                </button>
+            </div>
 
-            <div class="nodes-table-wrapper">
-                <table class="nodes-table" id="nodes-table">
-                    <thead>
-                        <tr>
-                            <th>ID</th>
-                            <th>NAME</th>
-                            <th>TYPE</th>
-                            <th>X</th>
-                            <th>Y</th>
-                            <th>ACTION</th>
-                        </tr>
-                    </thead>
-                    <tbody id="nodes-tbody">
-                        <tr><td colspan="6" class="table-empty">Loading…</td></tr>
-                    </tbody>
-                </table>
+            <!-- Tab 1: Registered Nodes Table -->
+            <div id="tab-panel-nodes" class="inspector-tab-panel">
+                <div class="inspector-search-row">
+                    <input
+                        type="text"
+                        id="nodes-filter-input"
+                        placeholder="Filter registered nodes by name or sector…"
+                        spellcheck="false"
+                    >
+                </div>
+                <div class="nodes-table-wrapper">
+                    <table class="nodes-table" id="nodes-table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>FACILITY</th>
+                                <th>SECTOR</th>
+                                <th>COORDS</th>
+                                <th>ACTIONS</th>
+                            </tr>
+                        </thead>
+                        <tbody id="nodes-tbody">
+                            <tr><td colspan="5" class="table-empty">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Tab 2: Registered Dependency Edges Table -->
+            <div id="tab-panel-edges" class="inspector-tab-panel hidden">
+                <div class="manual-edge-bar">
+                    <select id="manual-edge-source" aria-label="Source Node">
+                        <option value="">Source Facility…</option>
+                    </select>
+                    <span class="edge-arrow-label">→</span>
+                    <select id="manual-edge-target" aria-label="Target Node">
+                        <option value="">Target Facility…</option>
+                    </select>
+                    <button type="button" id="manual-edge-add-btn" class="run-button manual-edge-btn">+ Link</button>
+                </div>
+
+                <div class="nodes-table-wrapper">
+                    <table class="nodes-table" id="edges-table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>SOURCE → TARGET</th>
+                                <th>ROUTE</th>
+                                <th>ACTION</th>
+                            </tr>
+                        </thead>
+                        <tbody id="edges-tbody">
+                            <tr><td colspan="4" class="table-empty">Loading…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </section>
     </main>
 
-    <script src="/static/admin.js?v=7"></script>
+    <script src="/static/admin.js?v=10"></script>
 </body>
 </html>
