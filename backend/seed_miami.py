@@ -135,17 +135,17 @@ MIN_SEPARATION_DEG = 0.0085
 
 # Task 2: Strict Directed Physical Interdependency Matrix
 # Defines (supplier_sector, consumer_sector, is_cyclic_fallback)
-#   • energy MUST supply EVERYTHING (water, comms, transport, health)
-#   • water MUST supply health
-#   • transport MUST supply health (ambulance access) AND energy (fuel delivery for backup generators)
+#   • Hospitals (health) MUST receive electricity (energy), water (water), and communications (comms)
+#   • Electricity plants/substations (energy) ONLY need other electricity plants (energy -> energy)
+#     in order to supply downstream facilities and residential neighborhoods
+#   • Water, Comms, and Transport facilities receive electricity from energy plants/substations
 INTERDEPENDENCY_MATRIX: list[tuple[str, str, bool]] = [
     ("energy", "health", False),
+    ("water", "health", False),
+    ("comms", "health", False),
     ("energy", "water", False),
     ("energy", "comms", False),
     ("energy", "transport", False),
-    ("water", "health", False),
-    ("transport", "health", False),
-    ("transport", "energy", True),  # Cyclic dependency (Energy <-> Transport) with temporal battery/fuel fallback
 ]
 
 
@@ -313,10 +313,100 @@ def assign_node_tier_and_capacity(
     }
 
 
+def compute_demographic_profile(
+    name: str,
+    node_type: str,
+    tier: str,
+    lon: float,
+    lat: float,
+) -> tuple[float, int]:
+    """
+    Task 1: Procedurally generates `social_vulnerability_index` (SVI, float from 0.0 to 1.0)
+    and `population_served` (int) based on node type, infrastructure tier, and geographic
+    clustering across Miami neighborhoods:
+      • High SVI (> 0.75) & High Population Density:
+          - Little Haiti / Little River / Liberty City (lat >= 25.815, lon <= -80.185)
+          - Overtown / Allapattah / Civic Center Medical District (25.780 <= lat < 25.815, lon <= -80.194)
+          - Little Havana / Latin Quarter / Flagami (25.758 <= lat < 25.780, lon < -80.205)
+      • Low SVI (< 0.30) & High Financial/Commercial Tier:
+          - Brickell Financial District & Downtown Bayfront (25.752 <= lat <= 25.776, -80.196 <= lon <= -80.184)
+          - Fisher Island / Miami Beach / Key Biscayne / Vizcaya / Coconut Grove Bayfront (lon > -80.180 or coastal SE)
+      • Moderate SVI (0.35 - 0.68):
+          - Midtown / Buena Vista / Coral Gables / Shenandoah / Douglas Road
+    """
+    name_lower = (name or "").lower()
+    sector = (node_type or "energy").lower()
+    is_primary = str(tier).lower() == "primary"
+
+    # Deterministic spatial jitter in [-0.04, +0.04] derived from coordinates and facility name
+    name_hash = sum((idx + 1) * ord(ch) for idx, ch in enumerate(name_lower))
+    coord_seed = int(abs(round(lon * 10000)) + abs(round(lat * 10000)) + name_hash)
+    svi_jitter = ((coord_seed % 17) - 8) * 0.005
+
+    # 1. Geographic & Neighborhood Clustering in Miami
+    if any(k in name_lower for k in ("borinquen", "overtown", "culmer", "little river", "jackson memorial", "jackson behavioral", "uhealth", "latin quarter", "lawrence", "leon medical")):
+        # Historically underserved / high-density safety-net neighborhoods
+        base_svi = 0.84
+        base_pop = 58_000
+    elif any(k in name_lower for k in ("brickell", "fisher island", "vizcaya", "miami beach", "equinix", "nap of the americas", "virginia key")):
+        # Financial district, barrier islands, or commercial data/island hubs (low SVI, high tier)
+        base_svi = 0.21
+        base_pop = 19_500
+    elif lat >= 25.815 and lon <= -80.185:
+        # Little Haiti / Little River / Liberty City corridor
+        base_svi = 0.86
+        base_pop = 54_000
+    elif 25.780 <= lat < 25.815 and lon <= -80.194:
+        # Overtown / Allapattah / Civic Center
+        base_svi = 0.82
+        base_pop = 62_000
+    elif 25.758 <= lat < 25.780 and lon < -80.205:
+        # Little Havana / Flagami / West Flagler
+        base_svi = 0.79
+        base_pop = 51_000
+    elif (25.752 <= lat <= 25.778 and -80.196 <= lon <= -80.182) or lon > -80.175:
+        # Brickell Financial District / Downtown / Coastal Islands
+        base_svi = 0.22
+        base_pop = 21_000
+    elif lat < 25.752 and lon > -80.225:
+        # Coconut Grove Bayfront / Vizcaya / Mercy coastal corridor
+        base_svi = 0.26
+        base_pop = 24_000
+    else:
+        # Midtown / Coral Gables / Shenandoah / Douglas / Buena Vista transitional zones
+        base_svi = 0.52
+        base_pop = 34_000
+
+    # 2. Sector & Tier Adjustments
+    sector_svi_delta = {
+        "health": 0.04,     # Safety-net hospitals & community clinics serve acute vulnerable populations
+        "water": 0.02,      # Municipal water/wastewater lifelines
+        "transport": 0.02,  # Public transit stations serve transit-dependent residents
+        "energy": 0.00,
+        "comms": -0.02,
+    }.get(sector, 0.0)
+
+    sector_pop_mult = {
+        "water": 1.35,
+        "health": 1.25,
+        "energy": 1.15,
+        "comms": 1.05,
+        "transport": 0.90,
+    }.get(sector, 1.0)
+
+    tier_pop_mult = 1.38 if is_primary else 0.82
+    pop_jitter = ((coord_seed % 23) - 11) * 650
+
+    svi_score = round(min(0.98, max(0.08, base_svi + sector_svi_delta + svi_jitter)), 2)
+    population_served = max(4_500, int(round((base_pop * sector_pop_mult * tier_pop_mult + pop_jitter) / 100.0) * 100))
+    return svi_score, population_served
+
+
 def ensure_balanced_sector_hierarchy(nodes: list[dict[str, Any]]) -> None:
     """
     Ensures every infrastructure sector has both Primary (trunk/high-capacity) and
-    Secondary (local distribution) nodes so hierarchical flow routing is always well-posed.
+    Secondary (local distribution) nodes so hierarchical flow routing is always well-posed,
+    and computes procedural demographic attributes (`social_vulnerability_index`, `population_served`).
     """
     by_type: dict[str, list[dict[str, Any]]] = {}
     for n in nodes:
@@ -347,6 +437,17 @@ def ensure_balanced_sector_hierarchy(nodes: list[dict[str, Any]]) -> None:
             for n in ranked[target_primary_count:]:
                 n["tier"] = "Secondary"
                 n["capacity"] = default_secondary_caps.get(sector, 2)
+
+    for n in nodes:
+        svi_val, pop_val = compute_demographic_profile(
+            name=str(n.get("name", "")),
+            node_type=str(n.get("type", "energy")),
+            tier=str(n.get("tier", "Secondary")),
+            lon=float(n.get("x", -80.205)),
+            lat=float(n.get("y", 25.778)),
+        )
+        n["social_vulnerability_index"] = svi_val
+        n["population_served"] = pop_val
 
 
 def is_too_close(
@@ -380,7 +481,8 @@ def extract_osm_miami_nodes() -> list[dict[str, Any]]:
     """
     Downloads critical infrastructure geometries for Miami, Florida from OpenStreetMap,
     retaining named facilities with spatial separation and computing Task 1 hierarchy
-    (tier, capacity, voltage_kv, area_sqm, battery_backup_hours).
+    (tier, capacity, voltage_kv, area_sqm, battery_backup_hours) and Climate Justice
+    demographic attributes (social_vulnerability_index, population_served).
     """
     print(f"Downloading OpenStreetMap features for '{PLACE_QUERY}' with tags={OSM_TAGS}...")
     gdf: gpd.GeoDataFrame = ox.features_from_place(PLACE_QUERY, tags=OSM_TAGS)
@@ -747,10 +849,10 @@ def build_street_dependency_graph(
       • Task 1: Every node carries `tier` ('Primary' | 'Secondary'), `capacity`,
                 `voltage_kv`, `area_sqm`, and `battery_backup_hours`.
       • Task 2: Enforces the Realistic Interdependency Matrix:
-                - energy MUST supply EVERYTHING (water, comms, transport, health)
-                - water MUST supply health
-                - transport MUST supply health (ambulance access) AND energy (fuel delivery)
-                - Cyclic dependencies (Energy <-> Transport) include temporal fallback attributes.
+                - Hospitals (`health`) MUST receive `energy`, `water`, and `comms`.
+                - Electricity plants/substations (`energy`) ONLY receive incoming connections from
+                  other `energy` plants (`energy -> energy`) to supply downstream facilities/homes.
+                - `water`, `comms`, and `transport` receive electricity from `energy`.
       • Task 3: Uses `networkx.min_cost_flow` over OSM street routing distances so no Secondary
                 node is overloaded (e.g. a secondary transformer can never supply 5 hospitals).
     """
@@ -771,6 +873,17 @@ def build_street_dependency_graph(
         tier = str(node.get("tier", "Secondary"))
         cap = int(node.get("capacity", 6 if tier == "Primary" else 2))
         backup_h = float(node.get("battery_backup_hours", 48.0 if tier == "Primary" else 24.0))
+        if "social_vulnerability_index" in node and "population_served" in node:
+            svi_val = float(node["social_vulnerability_index"])
+            pop_val = int(node["population_served"])
+        else:
+            svi_val, pop_val = compute_demographic_profile(
+                name=str(node["name"]),
+                node_type=n_type,
+                tier=tier,
+                lon=float(node["x"]),
+                lat=float(node["y"]),
+            )
 
         graph.add_node(
             node["name"],
@@ -780,6 +893,8 @@ def build_street_dependency_graph(
             tier=tier,
             capacity=cap,
             battery_backup_hours=backup_h,
+            social_vulnerability_index=svi_val,
+            population_served=pop_val,
             voltage_kv=float(node.get("voltage_kv", 0.0)),
             area_sqm=float(node.get("area_sqm", 0.0)),
             street_node_id=int(node["street_node_id"]),
@@ -789,6 +904,7 @@ def build_street_dependency_graph(
         remaining_global_capacity[node["name"]] = cap * 2 if tier == "Primary" else cap + 1
 
     # 1. Wire Intra-Sector Primary -> Secondary Hierarchies (Transmission -> Distribution)
+    #    For energy: Primary power plants/substations -> Secondary substations, plus Primary ring
     for sector in ("energy", "water", "comms"):
         if len(nodes_by_type.get(sector, [])) >= 2:
             wire_intra_sector_hierarchy(
@@ -807,19 +923,11 @@ def build_street_dependency_graph(
         if not suppliers or not consumers:
             continue
 
-        # For transport -> energy (fuel delivery to backup generators), prioritize Primary transport hubs
-        # supplying substations so cyclic edges remain sparse and physically realistic
-        effective_suppliers = suppliers
-        if is_cyclic and supplier_sector == "transport" and consumer_sector == "energy":
-            primary_transport = [s for s in suppliers if s.get("tier") == "Primary"]
-            if primary_transport:
-                effective_suppliers = primary_transport
-
         wire_sector_with_min_cost_flow(
             street_graph=street_graph,
             undirected_street=undirected_street,
             graph=graph,
-            suppliers=effective_suppliers,
+            suppliers=suppliers,
             consumers=consumers,
             dependency_type=supplier_sector,
             remaining_global_capacity=remaining_global_capacity,
@@ -846,8 +954,8 @@ def build_full_miami_street_topology() -> nx.DiGraph:
 async def seed_miami_database() -> None:
     """
     Clears existing Node and Edge tables and persists all OSM-extracted
-    Miami nodes (with tier, capacity, and battery_backup_hours) and capacity-constrained
-    street-routed dependency edges (with routing_distance and path_nodes) into PostgreSQL.
+    Miami nodes (with tier, capacity, battery_backup_hours, social_vulnerability_index,
+    and population_served) and capacity-constrained street-routed dependency edges into PostgreSQL.
     """
     await init_db()
 
@@ -866,6 +974,12 @@ async def seed_miami_database() -> None:
         )
         await conn.execute(
             text("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS battery_backup_hours DOUBLE PRECISION DEFAULT 24.0;")
+        )
+        await conn.execute(
+            text("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS social_vulnerability_index DOUBLE PRECISION DEFAULT 0.5;")
+        )
+        await conn.execute(
+            text("ALTER TABLE nodes ADD COLUMN IF NOT EXISTS population_served INTEGER DEFAULT 25000;")
         )
         await conn.execute(
             text("ALTER TABLE edges ADD COLUMN IF NOT EXISTS routing_distance DOUBLE PRECISION;")
@@ -894,6 +1008,8 @@ async def seed_miami_database() -> None:
                     tier=str(attrs.get("tier", "Secondary")),
                     capacity=int(attrs.get("capacity", 3)),
                     battery_backup_hours=float(attrs.get("battery_backup_hours", 24.0)),
+                    social_vulnerability_index=float(attrs.get("social_vulnerability_index", 0.5)),
+                    population_served=int(attrs.get("population_served", 25000)),
                 )
                 session.add(node_obj)
                 node_records[str(node_name)] = node_obj

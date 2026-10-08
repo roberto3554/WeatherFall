@@ -87,39 +87,35 @@ MIAMI_NODES: list[dict[str, Any]] = [
 ]
 
 # Directed dependency edges between real-world Miami infrastructure facilities
+# Rules:
+#   • Electricity plants/substations (power/energy) ONLY receive from other electricity plants/substations
+#   • Hospitals (health) receive electricity, water, and communications
+#   • Water, Comms, and Transport receive electricity from energy plants/substations
 MIAMI_EDGES: list[tuple[str, str]] = [
-    # Baseload Generation -> Substations & Primary Utilities
+    # Power Grid Hierarchy (Energy -> Energy)
+    ("Turkey Point Nuclear Generating Station", "FPL Dania Beach Clean Energy Center"),
+    ("FPL Dania Beach Clean Energy Center", "Turkey Point Nuclear Generating Station"),
     ("Turkey Point Nuclear Generating Station", "Downtown Miami Substation"),
     ("Turkey Point Nuclear Generating Station", "Brickell Underground Vault Substation"),
-    ("Turkey Point Nuclear Generating Station", "Alexander Orr Jr. Water Treatment Plant"),
     ("FPL Dania Beach Clean Energy Center", "Downtown Miami Substation"),
+    # Energy -> Water, Comms, Transport, Health
+    ("Turkey Point Nuclear Generating Station", "Alexander Orr Jr. Water Treatment Plant"),
     ("FPL Dania Beach Clean Energy Center", "Miami International Airport (MIA) Fuel & Airfield Grid"),
     ("FPL Dania Beach Clean Energy Center", "Miami Beach Stormwater Pump Station #1"),
-    # Downtown Miami Substation -> Core Metro Dependents
     ("Downtown Miami Substation", "Jackson Memorial Hospital"),
     ("Downtown Miami Substation", "PortMiami Logistics Hub"),
     ("Downtown Miami Substation", "NAP of the Americas (Equinix MI1)"),
-    ("Downtown Miami Substation", "Virginia Key Wastewater Treatment Plant"),
-    # Brickell Vault Substation -> Coastal & Financial District Dependents
+    ("Downtown Miami Substation", "Miami-Dade 911 Emergency Operations Center"),
     ("Brickell Underground Vault Substation", "NAP of the Americas (Equinix MI1)"),
     ("Brickell Underground Vault Substation", "Virginia Key Wastewater Treatment Plant"),
     ("Brickell Underground Vault Substation", "PortMiami Logistics Hub"),
-    # Water & Coastal Drainage Cascade
+    # Water Hierarchy & Hospital Supply (Water -> Water, Water -> Health)
+    ("Alexander Orr Jr. Water Treatment Plant", "Virginia Key Wastewater Treatment Plant"),
+    ("Alexander Orr Jr. Water Treatment Plant", "Miami Beach Stormwater Pump Station #1"),
     ("Alexander Orr Jr. Water Treatment Plant", "Jackson Memorial Hospital"),
-    ("Alexander Orr Jr. Water Treatment Plant", "Miami International Airport (MIA) Fuel & Airfield Grid"),
-    ("Alexander Orr Jr. Water Treatment Plant", "PortMiami Logistics Hub"),
-    ("Virginia Key Wastewater Treatment Plant", "Alexander Orr Jr. Water Treatment Plant"),
-    ("Miami Beach Stormwater Pump Station #1", "PortMiami Logistics Hub"),
-    # Telecommunications & Fiber Exchange Cascade
+    # Telecommunications Supply (Comms -> Comms/Safety, Comms -> Health)
     ("NAP of the Americas (Equinix MI1)", "Miami-Dade 911 Emergency Operations Center"),
     ("NAP of the Americas (Equinix MI1)", "Jackson Memorial Hospital"),
-    ("NAP of the Americas (Equinix MI1)", "PortMiami Logistics Hub"),
-    ("NAP of the Americas (Equinix MI1)", "Miami International Airport (MIA) Fuel & Airfield Grid"),
-    # Emergency Dispatch & Transport Cascade
-    ("Miami-Dade 911 Emergency Operations Center", "Jackson Memorial Hospital"),
-    ("Miami-Dade 911 Emergency Operations Center", "Miami Beach Stormwater Pump Station #1"),
-    ("PortMiami Logistics Hub", "Jackson Memorial Hospital"),
-    ("Miami International Airport (MIA) Fuel & Airfield Grid", "Miami-Dade 911 Emergency Operations Center"),
 ]
 
 
