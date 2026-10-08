@@ -121,15 +121,15 @@ except ImportError:
 
 def get_real_client_ip(request: Request) -> str:
     """
-    Task 3: Extracts the real client IP address when deployed behind an Nginx
-    reverse proxy or Docker network by inspecting X-Forwarded-For / X-Real-IP
-    headers, falling back to slowapi's get_remote_address(request).
+    Extracts the real client IP address when deployed behind Traefik or Nginx.
+    Uses the right-most proxy-appended hop in X-Forwarded-For (or X-Real-IP) so
+    external clients cannot spoof X-Forwarded-For headers to bypass slowapi rate limits.
     """
     forwarded_for = request.headers.get("X-Forwarded-For")
     if forwarded_for:
-        client_ip = forwarded_for.split(",")[0].strip()
-        if client_ip:
-            return client_ip
+        hops = [ip.strip() for ip in forwarded_for.split(",") if ip.strip()]
+        if hops:
+            return hops[-1]
 
     real_ip = request.headers.get("X-Real-IP")
     if real_ip and real_ip.strip():
@@ -200,11 +200,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 
+_IS_PRODUCTION = os.getenv("ENV", "").lower() == "production"
+
 app = FastAPI(
     title="WeatherFall API",
     description="AI-driven climate risk cascade simulation API (Miami Infrastructure Edition).",
     version="1.6.0",
     lifespan=lifespan,
+    docs_url=None if _IS_PRODUCTION else "/docs",
+    redoc_url=None if _IS_PRODUCTION else "/redoc",
+    openapi_url=None if _IS_PRODUCTION else "/openapi.json",
 )
 
 # Attach SlowAPI limiter, 429 exception handler, and middleware
@@ -212,12 +217,22 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
+_RAW_ALLOWED_ORIGINS = os.getenv(
+    "ALLOWED_ORIGINS",
+    "http://localhost:8000,http://127.0.0.1:8000",
+)
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in _RAW_ALLOWED_ORIGINS.split(",")
+    if origin.strip() and origin.strip() != "*"
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With"],
 )
 
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
@@ -573,10 +588,17 @@ async def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
     token = create_access_token(subject=user.username, is_admin=user.is_admin)
+    cookie_secure = (
+        _IS_PRODUCTION
+        or os.getenv("COOKIE_SECURE", "").lower() in {"1", "true", "yes"}
+        or request.url.scheme == "https"
+        or request.headers.get("X-Forwarded-Proto", "").lower() == "https"
+    )
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=token,
         httponly=True,
+        secure=cookie_secure,
         samesite="lax",
         max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         path="/",

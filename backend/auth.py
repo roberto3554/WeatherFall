@@ -19,12 +19,26 @@ except ImportError:
     from models import User
 
 
-SECRET_KEY = os.getenv("SECRET_KEY", "weatherfall-dev-secret-change-me-in-production")
+_DEFAULT_DEV_SECRET = "weatherfall-dev-secret-change-me-in-production"
+SECRET_KEY = os.getenv("SECRET_KEY", _DEFAULT_DEV_SECRET)
+if os.getenv("ENV", "").lower() == "production" and (
+    SECRET_KEY == _DEFAULT_DEV_SECRET or len(SECRET_KEY) < 32
+):
+    raise RuntimeError(
+        "CRITICAL SECURITY ERROR: SECRET_KEY must be set to a cryptographically strong "
+        "random string (>= 32 bytes) in production."
+    )
+
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+BCRYPT_ROUNDS = int(os.getenv("BCRYPT_ROUNDS", "12"))
 SESSION_COOKIE_NAME = "weatherfall_session"
 
-pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+pwd_context = CryptContext(
+    schemes=["bcrypt", "pbkdf2_sha256"],
+    deprecated="auto",
+    bcrypt__rounds=max(12, min(16, BCRYPT_ROUNDS)),
+)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 
 # Server-side denylist of revoked JWT IDs (jti) and raw tokens upon explicit sign-out
@@ -32,7 +46,7 @@ _REVOKED_TOKEN_JTIS: set[str] = set()
 
 
 def hash_password(password: str) -> str:
-    """Hash a plaintext password with PBKDF2-SHA256."""
+    """Hash a plaintext password with bcrypt (work factor >= 12)."""
     return pwd_context.hash(password)
 
 
