@@ -9,7 +9,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-    <link rel="stylesheet" href="/static/style.css?v=5">
+    <link rel="stylesheet" href="/static/style.css?v=7">
 </head>
 <body>
     <div class="layout-container">
@@ -28,9 +28,28 @@
                         <p class="subtitle">Miami Infrastructure Command Center</p>
                     </div>
                 </div>
-                <button type="button" id="sidebar-toggle-btn" class="mobile-toggle-btn" aria-label="Toggle Controls">
-                    Hide
-                </button>
+                <div class="sidebar-header-actions">
+                    <button type="button" id="theme-toggle-btn" class="theme-toggle-btn" title="Switch between Dark and Light mode" aria-label="Switch theme">
+                        <svg id="theme-icon-sun" class="theme-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="5"/>
+                            <line x1="12" y1="1" x2="12" y2="3"/>
+                            <line x1="12" y1="21" x2="12" y2="23"/>
+                            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+                            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+                            <line x1="1" y1="12" x2="3" y2="12"/>
+                            <line x1="21" y1="12" x2="23" y2="12"/>
+                            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+                            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+                        </svg>
+                        <svg id="theme-icon-moon" class="theme-icon hidden" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                        </svg>
+                        <span id="theme-toggle-label">Light</span>
+                    </button>
+                    <button type="button" id="sidebar-toggle-btn" class="mobile-toggle-btn" aria-label="Toggle Controls">
+                        Hide
+                    </button>
+                </div>
             </div>
 
             <!-- Operator Session Bar -->
@@ -252,6 +271,6 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=5"></script>
+    <script src="/static/app.js?v=7"></script>
 </body>
 </html>

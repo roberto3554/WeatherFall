@@ -73,6 +73,13 @@ function toSvgDataUri(svgString) {
     return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgString.trim());
 }
 
+const THEME_STORAGE_KEY = 'weatherfall_theme';
+let currentTheme = localStorage.getItem(THEME_STORAGE_KEY) === 'light' ? 'light' : 'dark';
+
+function isLightMode() {
+    return currentTheme === 'light';
+}
+
 /**
  * Task 3: Refined Map Node Aesthetics — softer, UI-friendly SaaS colors & crisp badge icons.
  */
@@ -88,10 +95,12 @@ function getSectorAccentColor(nodeType = 'energy') {
 function createModernNodeSvg(nodeType = 'energy', strokeOverride = null) {
     const type = String(nodeType).toLowerCase();
     const accent = strokeOverride || getSectorAccentColor(type);
+    const innerFill = isLightMode() ? '#ffffff' : '#0f172a';
+    const haloOpacity = isLightMode() ? '0.22' : '0.16';
 
     const baseBadge = (innerPath) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40">
-        <circle cx="20" cy="20" r="18" fill="${accent}" fill-opacity="0.16"/>
-        <circle cx="20" cy="20" r="15" fill="#0f172a" fill-opacity="0.92" stroke="${accent}" stroke-width="2.2"/>
+        <circle cx="20" cy="20" r="18" fill="${accent}" fill-opacity="${haloOpacity}"/>
+        <circle cx="20" cy="20" r="15" fill="${innerFill}" fill-opacity="0.95" stroke="${accent}" stroke-width="2.2"/>
         ${innerPath}
     </svg>`;
 
@@ -128,24 +137,82 @@ function createModernNodeSvg(nodeType = 'energy', strokeOverride = null) {
     `);
 }
 
-const SVG_ICONS = {
-    energy: toSvgDataUri(createModernNodeSvg('energy')),
-    health: toSvgDataUri(createModernNodeSvg('health')),
-    comms: toSvgDataUri(createModernNodeSvg('comms')),
-    water: toSvgDataUri(createModernNodeSvg('water')),
-    transport: toSvgDataUri(createModernNodeSvg('transport'))
-};
-
 function getNodeSvgIcon(nodeType = 'energy', strokeOverride = null) {
-    if (strokeOverride) {
-        return toSvgDataUri(createModernNodeSvg(nodeType, strokeOverride));
+    return toSvgDataUri(createModernNodeSvg(nodeType, strokeOverride));
+}
+
+function applyTheme(theme) {
+    currentTheme = theme === 'light' ? 'light' : 'dark';
+    localStorage.setItem(THEME_STORAGE_KEY, currentTheme);
+
+    if (currentTheme === 'light') {
+        document.documentElement.setAttribute('data-theme', 'light');
+        document.body.setAttribute('data-theme', 'light');
+    } else {
+        document.documentElement.removeAttribute('data-theme');
+        document.body.removeAttribute('data-theme');
     }
-    const type = String(nodeType).toLowerCase();
-    if (type.includes('water')) return SVG_ICONS.water;
-    if (type.includes('transport')) return SVG_ICONS.transport;
-    if (type.includes('health')) return SVG_ICONS.health;
-    if (type.includes('comms') || type.includes('telecom')) return SVG_ICONS.comms;
-    return SVG_ICONS.energy;
+
+    const sunIcon = document.getElementById('theme-icon-sun');
+    const moonIcon = document.getElementById('theme-icon-moon');
+    const labelEl = document.getElementById('theme-toggle-label');
+
+    if (sunIcon && moonIcon && labelEl) {
+        if (currentTheme === 'light') {
+            sunIcon.classList.add('hidden');
+            moonIcon.classList.remove('hidden');
+            labelEl.textContent = 'Dark';
+        } else {
+            sunIcon.classList.remove('hidden');
+            moonIcon.classList.add('hidden');
+            labelEl.textContent = 'Light';
+        }
+    }
+
+    if (network) {
+        const light = isLightMode();
+        network.setOptions({
+            nodes: {
+                shadow: {
+                    enabled: true,
+                    color: light ? 'rgba(15, 23, 42, 0.22)' : 'rgba(2, 6, 23, 0.65)',
+                    size: 12,
+                    x: 0,
+                    y: 3
+                },
+                font: {
+                    color: light ? '#0f172a' : '#f8fafc',
+                    strokeWidth: 3.5,
+                    strokeColor: light ? '#ffffff' : '#0f172a',
+                    size: 11,
+                    face: 'Inter, -apple-system, BlinkMacSystemFont, sans-serif'
+                }
+            }
+        });
+
+        if (nodesDataSet && !isSimulating) {
+            const existingNodes = nodesDataSet.get();
+            const updatedNodes = existingNodes.map(n => {
+                const topo = topologyNodes.find(t => t.id === n.id);
+                const nType = topo ? topo.type : (n.group || 'energy');
+                let override = null;
+                if (savedNodeIds.has(n.id)) override = '#0284c7';
+                else if (n.label && n.label.includes('Failed') || n.label && n.label.includes('Epicenter')) override = '#ef4444';
+                else if (n.label && n.label.includes('Intact')) override = '#10b981';
+                return {
+                    id: n.id,
+                    image: getNodeSvgIcon(nType, override)
+                };
+            });
+            nodesDataSet.update(updatedNodes);
+        }
+
+        network.redraw();
+    }
+}
+
+function toggleTheme() {
+    applyTheme(isLightMode() ? 'dark' : 'light');
 }
 
 function buildPopoverTooltip(node, statusText = 'Operational') {
@@ -502,21 +569,22 @@ async function fetchAndRenderTopology() {
             }))
         );
 
+        const light = isLightMode();
         const options = {
             nodes: {
                 shape: 'image',
                 size: 19,
                 shadow: {
                     enabled: true,
-                    color: 'rgba(2, 6, 23, 0.65)',
+                    color: light ? 'rgba(15, 23, 42, 0.22)' : 'rgba(2, 6, 23, 0.65)',
                     size: 12,
                     x: 0,
                     y: 3
                 },
                 font: {
-                    color: '#f8fafc',
+                    color: light ? '#0f172a' : '#f8fafc',
                     strokeWidth: 3.5,
-                    strokeColor: '#0f172a',
+                    strokeColor: light ? '#ffffff' : '#0f172a',
                     size: 11,
                     face: 'Inter, -apple-system, BlinkMacSystemFont, sans-serif'
                 }
@@ -524,9 +592,9 @@ async function fetchAndRenderTopology() {
             edges: {
                 width: 1.5,
                 color: {
-                    color: 'rgba(148, 163, 184, 0.3)',
-                    highlight: '#38bdf8',
-                    hover: '#60a5fa'
+                    color: light ? 'rgba(51, 65, 85, 0.35)' : 'rgba(148, 163, 184, 0.3)',
+                    highlight: '#0284c7',
+                    hover: '#3b82f6'
                 },
                 arrows: { to: { enabled: true, scaleFactor: 0.5 } },
                 smooth: { type: 'continuous' }
@@ -554,8 +622,12 @@ async function fetchAndRenderTopology() {
                 const drawX = mapBounds.centerX - mapBounds.width / 2;
                 const drawY = mapBounds.centerY - mapBounds.height / 2;
                 ctx.save();
+                if (isLightMode()) {
+                    ctx.filter = 'invert(0.92) hue-rotate(180deg) saturate(0.85) brightness(1.05)';
+                }
                 ctx.drawImage(mapImage, drawX, drawY, mapBounds.width, mapBounds.height);
-                ctx.strokeStyle = 'rgba(148, 163, 184, 0.22)';
+                ctx.filter = 'none';
+                ctx.strokeStyle = isLightMode() ? 'rgba(15, 23, 42, 0.18)' : 'rgba(148, 163, 184, 0.22)';
                 ctx.lineWidth = 1.5;
                 ctx.strokeRect(drawX, drawY, mapBounds.width, mapBounds.height);
                 ctx.restore();
@@ -1156,8 +1228,14 @@ async function exportPDFReport() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    applyTheme(currentTheme);
     fetchAndRenderTopology();
     updateAuthBar();
+
+    const themeToggleBtn = document.getElementById('theme-toggle-btn');
+    if (themeToggleBtn) {
+        themeToggleBtn.addEventListener('click', toggleTheme);
+    }
 
     const logoutBtn = document.getElementById('auth-logout-btn');
     if (logoutBtn) logoutBtn.addEventListener('click', handleLogout);
