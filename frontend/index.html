@@ -10,7 +10,8 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-    <link rel="stylesheet" href="/static/style.css?v=13">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/intro.js/7.2.0/introjs.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
+    <link rel="stylesheet" href="/static/style.css?v=17">
 </head>
 <body>
     <div class="layout-container">
@@ -53,15 +54,6 @@
                 </div>
             </div>
 
-            <!-- Global Simulation Clock (DES Synchronous Header Bar) -->
-            <div class="global-sim-clock-bar" id="global-sim-clock-bar" role="timer" aria-live="polite" aria-label="Global Simulation Clock">
-                <div class="sim-clock-label-group">
-                    <span class="sim-clock-indicator" id="sim-clock-indicator"></span>
-                    <span class="sim-clock-label">Global Simulation Clock</span>
-                </div>
-                <span class="sim-clock-value" id="global-sim-clock">T+00:00</span>
-            </div>
-
             <!-- Operator Session Bar -->
             <div class="auth-bar" id="auth-bar">
                 <div class="auth-user-pill">
@@ -69,6 +61,9 @@
                     <span class="auth-user" id="auth-user">guest</span>
                 </div>
                 <div class="auth-actions">
+                    <button type="button" class="auth-link quick-tour-btn" id="quick-tour-btn" title="Launch Interactive Onboarding Tour" aria-label="Quick Tour">
+                        <span class="quick-tour-qmark">?</span> Quick Tour
+                    </button>
                     <a class="auth-link hidden" id="auth-admin-link" href="/admin">Admin Console</a>
                     <a class="auth-link" id="auth-login-link" href="/login">Sign In</a>
                     <button type="button" class="auth-link hidden" id="auth-logout-btn">Sign Out</button>
@@ -158,7 +153,7 @@
                     </div>
                 </div>
 
-                <div class="control-group">
+                <div id="resource-knapsack-group" class="control-group">
                     <div class="label-row">
                         <label for="emergency-budget">Knapsack Resource Limits</label>
                         <span class="badge">Finite Ops</span>
@@ -243,66 +238,81 @@
 
         <main class="workspace">
             <div class="canvas-wrapper">
-                <div class="canvas-legend">
-                    <span class="legend-item"><i class="dot dot-energy"></i> Energy</span>
-                    <span class="legend-item"><i class="dot dot-water"></i> Water</span>
-                    <span class="legend-item"><i class="dot dot-transport"></i> Transport</span>
-                    <span class="legend-item"><i class="dot dot-health"></i> Health</span>
-                    <span class="legend-item"><i class="dot dot-comms"></i> Comms</span>
-                    <span class="legend-divider"></span>
-                    <span class="legend-item"><i class="dot dot-critical-battery"></i> Critical Battery</span>
-                    <span class="legend-item"><i class="dot dot-fail"></i> Offline</span>
-                    <span class="legend-item"><i class="dot dot-survive"></i> Intact</span>
-                    <span class="legend-item"><i class="dot dot-saved"></i> AI Rerouted</span>
-                </div>
                 <div id="network-canvas"></div>
             </div>
 
             <!-- Incident Timeline / Live Feed Drawer -->
-            <section id="console-drawer" class="console-drawer">
+            <section id="incident-drawer" class="console-drawer incident-drawer">
                 <div id="console-resizer" class="console-resizer" title="Drag up or down to resize timeline">
                     <span class="resizer-grip"></span>
                 </div>
-                <div id="console-header" class="console-header">
-                    <div class="feed-header-left">
-                        <span class="feed-pulse-dot"></span>
-                        <span class="console-title">Live Incident Timeline</span>
-                        <span id="feed-count-badge" class="feed-badge">Standby</span>
+
+                <!-- Consolidated Static Legend & Live Telemetry Top Chrome (Always Visible When Collapsed) -->
+                <div class="drawer-top-chrome">
+                    <div id="node-legend-bar" class="canvas-legend static-legend-bar" role="region" aria-label="Infrastructure Node &amp; Status Legend">
+                        <span class="legend-group-label">Sectors</span>
+                        <span class="legend-item"><i class="dot dot-energy"></i> Energy</span>
+                        <span class="legend-item"><i class="dot dot-water"></i> Water</span>
+                        <span class="legend-item"><i class="dot dot-transport"></i> Transport</span>
+                        <span class="legend-item"><i class="dot dot-health"></i> Health</span>
+                        <span class="legend-item"><i class="dot dot-comms"></i> Comms</span>
+                        <span class="legend-divider"></span>
+                        <span class="legend-group-label">Node States</span>
+                        <span class="legend-item"><i class="dot dot-critical-battery"></i> Critical Battery</span>
+                        <span class="legend-item"><i class="dot dot-fail"></i> Offline</span>
+                        <span class="legend-item"><i class="dot dot-survive"></i> Intact</span>
+                        <span class="legend-item"><i class="dot dot-saved"></i> AI Rerouted</span>
                     </div>
-                    <div class="timeline-telemetry" aria-label="Live Cascade Telemetry">
-                        <div class="tt-pill">
-                            <span class="tt-label">Sim Clock</span>
-                            <span id="stat-clock" class="t-value val-clock">T+00:00</span>
+
+                    <div id="console-header" class="console-header">
+                        <div class="feed-header-left">
+                            <span class="feed-pulse-dot"></span>
+                            <span class="console-title">Live Incident Timeline</span>
+                            <span id="feed-count-badge" class="feed-badge">Standby</span>
                         </div>
-                        <div class="tt-pill">
-                            <span class="tt-label">Status</span>
-                            <span id="stat-state" class="t-value state-idle">READY</span>
+                        <div class="timeline-telemetry" aria-label="Live Cascade Telemetry">
+                            <div class="tt-pill">
+                                <span class="tt-label">Status</span>
+                                <span id="stat-state" class="t-value state-idle">READY</span>
+                            </div>
+                            <div class="tt-pill">
+                                <span class="tt-label">Events</span>
+                                <span id="stat-evaluated" class="t-value">0 / 0</span>
+                            </div>
+                            <div class="tt-pill">
+                                <span class="tt-label">Impacted</span>
+                                <span id="stat-failed" class="t-value val-fail">0</span>
+                            </div>
+                            <div class="tt-pill">
+                                <span class="tt-label">Restored</span>
+                                <span id="stat-survived" class="t-value val-survive">0</span>
+                            </div>
+
+                            <!-- Consolidated Time & Resource Cluster: Global Simulation Clock + Budget + Crews -->
+                            <div class="telemetry-resource-cluster" role="group" aria-label="Consolidated Time and Resource Metrics">
+                                <div class="global-sim-clock-bar tt-pill tt-pill-clock" id="global-sim-clock-bar" role="timer" aria-live="polite" aria-label="Global Simulation Clock">
+                                    <div class="sim-clock-label-group">
+                                        <span class="sim-clock-indicator" id="sim-clock-indicator"></span>
+                                        <span class="sim-clock-label tt-label">Global Simulation Clock</span>
+                                    </div>
+                                    <span class="sim-clock-value t-value val-clock" id="global-sim-clock">T+00:00</span>
+                                </div>
+                                <div class="tt-pill tt-pill-resource">
+                                    <span class="tt-label">Budget</span>
+                                    <span id="stat-budget" class="t-value val-budget">$5,000,000</span>
+                                </div>
+                                <div class="tt-pill tt-pill-resource">
+                                    <span class="tt-label">Crews</span>
+                                    <span id="stat-crews" class="t-value val-crews">3</span>
+                                </div>
+                            </div>
                         </div>
-                        <div class="tt-pill">
-                            <span class="tt-label">Events</span>
-                            <span id="stat-evaluated" class="t-value">0 / 0</span>
-                        </div>
-                        <div class="tt-pill">
-                            <span class="tt-label">Impacted</span>
-                            <span id="stat-failed" class="t-value val-fail">0</span>
-                        </div>
-                        <div class="tt-pill">
-                            <span class="tt-label">Restored</span>
-                            <span id="stat-survived" class="t-value val-survive">0</span>
-                        </div>
-                        <div class="tt-pill">
-                            <span class="tt-label">Budget</span>
-                            <span id="stat-budget" class="t-value">$5,000,000</span>
-                        </div>
-                        <div class="tt-pill">
-                            <span class="tt-label">Crews</span>
-                            <span id="stat-crews" class="t-value">3</span>
-                        </div>
+                        <button type="button" id="console-toggle-btn" class="console-toggle-btn" aria-expanded="true" aria-controls="console-log">
+                            Collapse
+                        </button>
                     </div>
-                    <button type="button" id="console-toggle-btn" class="console-toggle-btn">
-                        Collapse
-                    </button>
                 </div>
+
                 <div id="console-log" class="incident-feed">
                     <div class="feed-card feed-card-system log-line">
                         <div class="feed-card-icon system-icon">
@@ -458,6 +468,7 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=18"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/intro.js/7.2.0/intro.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="/static/app.js?v=22"></script>
 </body>
 </html>
