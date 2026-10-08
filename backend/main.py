@@ -538,36 +538,12 @@ async def serve_login() -> FileResponse:
 
 
 @app.get("/admin", response_model=None)
-async def serve_admin(
-    request: Request,
-    db: AsyncSession = Depends(get_db),
-) -> Response:
+async def serve_admin() -> FileResponse:
     """
-    Serves the GIS Infrastructure Admin Console only to authenticated administrators
-    with a verified server-side session cookie (or Authorization Bearer token).
-    Unauthenticated or expired sessions are redirected to /login?next=/admin.
+    Serves the GIS Infrastructure Admin Console shell with strict no-store cache headers.
+    All admin data and actions (/api/v1/auth/me, /api/v1/nodes, /api/v1/edges, /api/v1/osm/search)
+    require a verified administrator session via Depends(require_admin).
     """
-    auth_header = request.headers.get("Authorization", "")
-    bearer_token = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else None
-    raw_token = extract_request_token(request, bearer_token)
-
-    if not raw_token:
-        return RedirectResponse(url="/login?next=/admin", status_code=status.HTTP_302_FOUND)
-
-    try:
-        payload = decode_and_verify_token(raw_token)
-        username = payload.get("sub")
-        if not username or not isinstance(username, str):
-            raise ValueError("Missing subject claim")
-        result = await db.execute(select(User).where(User.username == username))
-        user = result.scalar_one_or_none()
-        if user is None or not user.is_active or not user.is_admin:
-            raise ValueError("Inactive or non-admin user")
-    except Exception:
-        redirect = RedirectResponse(url="/login?next=/admin", status_code=status.HTTP_302_FOUND)
-        redirect.delete_cookie(SESSION_COOKIE_NAME, path="/")
-        return redirect
-
     return FileResponse(
         os.path.join(FRONTEND_DIR, "admin.html"),
         headers={
@@ -619,9 +595,12 @@ async def logout(
     response: Response,
     token: str | None = Depends(oauth2_scheme),
 ) -> dict[str, str]:
-    """Revoke the active JWT session token server-side and clear the HttpOnly session cookie."""
-    resolved_token = extract_request_token(request, token)
-    revoke_token(resolved_token)
+    """Revoke active JWT session tokens server-side and clear the HttpOnly session cookie."""
+    if token and token.strip():
+        revoke_token(token.strip())
+    cookie_token = request.cookies.get(SESSION_COOKIE_NAME)
+    if cookie_token and cookie_token.strip():
+        revoke_token(cookie_token.strip())
     response.delete_cookie(SESSION_COOKIE_NAME, path="/")
     return {"status": "signed_out"}
 
@@ -654,8 +633,23 @@ async def register_user(
 
 
 @app.get("/api/v1/auth/me", response_model=UserResponse)
-async def me(user: User = Depends(get_current_user)) -> User:
-    """Return the currently authenticated user's profile."""
+async def me(
+    request: Request,
+    response: Response,
+    token: str | None = Depends(oauth2_scheme),
+    user: User = Depends(get_current_user),
+) -> User:
+    """Return the currently authenticated user's profile and keep the HttpOnly session cookie synchronized."""
+    active_token = extract_request_token(request, token)
+    if active_token:
+        response.set_cookie(
+            key=SESSION_COOKIE_NAME,
+            value=active_token,
+            httponly=True,
+            samesite="lax",
+            max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            path="/",
+        )
     return user
 
 
