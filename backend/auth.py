@@ -114,16 +114,28 @@ async def get_current_user(
         detail="Authentication required. Please sign in to continue.",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    resolved_token = extract_request_token(request, token)
-    if not resolved_token:
+    candidates: list[str] = []
+    if token and token.strip():
+        candidates.append(token.strip())
+    cookie_token = request.cookies.get(SESSION_COOKIE_NAME)
+    if cookie_token and cookie_token.strip() and cookie_token.strip() not in candidates:
+        candidates.append(cookie_token.strip())
+
+    if not candidates:
         raise credentials_exception
 
-    try:
-        payload = decode_and_verify_token(resolved_token)
-        username = payload.get("sub")
-        if not username or not isinstance(username, str):
-            raise credentials_exception
-    except JWTError:
+    username: Optional[str] = None
+    for cand in candidates:
+        try:
+            payload = decode_and_verify_token(cand)
+            sub = payload.get("sub")
+            if sub and isinstance(sub, str):
+                username = sub
+                break
+        except JWTError:
+            continue
+
+    if not username:
         raise credentials_exception
 
     result = await db.execute(select(User).where(User.username == username))
