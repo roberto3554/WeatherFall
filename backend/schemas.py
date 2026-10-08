@@ -39,7 +39,7 @@ class UserResponse(BaseModel):
     is_active: bool
 
 
-# ─── Infrastructure Nodes ────────────────────────────────────────────────
+# ─── Infrastructure Nodes & Edges ────────────────────────────────────────
 
 class NodeCreate(BaseModel):
     """Payload to register a new critical infrastructure node."""
@@ -50,6 +50,16 @@ class NodeCreate(BaseModel):
     type: str = Field(..., min_length=1, max_length=60)
     x: float = Field(..., description="Longitude or canvas X coordinate.")
     y: float = Field(..., description="Latitude or canvas Y coordinate.")
+    tier: Optional[str] = Field(default="Secondary", description="Hierarchical tier: 'Primary' or 'Secondary'.")
+    capacity: Optional[int] = Field(default=3, description="Maximum downstream flow / out-degree capacity.")
+    battery_backup_hours: Optional[float] = Field(
+        default=24.0,
+        description="Temporal backup autonomy in hours before cyclic dependency failure.",
+    )
+    auto_connect: bool = Field(
+        default=True,
+        description="Whether to automatically connect the new node to the nearest compatible node.",
+    )
 
 
 class NodeUpdate(BaseModel):
@@ -61,6 +71,9 @@ class NodeUpdate(BaseModel):
     type: Optional[str] = Field(None, min_length=1, max_length=60)
     x: Optional[float] = None
     y: Optional[float] = None
+    tier: Optional[str] = None
+    capacity: Optional[int] = None
+    battery_backup_hours: Optional[float] = None
 
 
 class NodeResponse(BaseModel):
@@ -73,6 +86,54 @@ class NodeResponse(BaseModel):
     type: str
     x: float
     y: float
+    tier: Optional[str] = "Secondary"
+    capacity: Optional[int] = 3
+    battery_backup_hours: Optional[float] = 24.0
+
+
+class EdgeCreate(BaseModel):
+    """Payload to manually create a directed dependency edge between two nodes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_node_id: Optional[int] = Field(
+        default=None,
+        description="Database ID of the upstream source node.",
+    )
+    target_node_id: Optional[int] = Field(
+        default=None,
+        description="Database ID of the downstream target node.",
+    )
+    source: Optional[int | str] = Field(
+        default=None,
+        description="Source node ID or facility name (alternative to source_node_id).",
+    )
+    target: Optional[int | str] = Field(
+        default=None,
+        description="Target node ID or facility name (alternative to target_node_id).",
+    )
+    routing_distance: Optional[float] = Field(
+        default=None,
+        description="Optional physical surface route distance in meters.",
+    )
+    path_nodes: Optional[list[Any]] = Field(
+        default=None,
+        description="Optional list of street intersection node IDs along the route.",
+    )
+
+
+class EdgeResponse(BaseModel):
+    """Public representation of a directed infrastructure dependency edge."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    source_node_id: int
+    target_node_id: int
+    source: Optional[str] = None
+    target: Optional[str] = None
+    routing_distance: Optional[float] = None
+    path_nodes: Optional[Any] = None
 
 
 # ─── Simulation ──────────────────────────────────────────────────────────
@@ -94,11 +155,16 @@ class SimulationRequest(BaseModel):
         examples=["Category 5", "EF-3", "Water level +2.5m"],
         description="Physical scale or intensity metric of the disaster.",
     )
-    trajectory: str = Field(
-        ...,
+    disaster_direction: str = Field(
+        default="Coastal",
         min_length=1,
+        examples=["North-West", "Coastal", "Atlantic East"],
+        description="Cardinal or geographical vector from which the disaster strikes (e.g., 'North-West', 'Coastal').",
+    )
+    trajectory: Optional[str] = Field(
+        default=None,
         examples=["Coming from the Atlantic East coast"],
-        description="Geographical trajectory or approach vector of the disaster.",
+        description="Optional geographical trajectory description (defaults to disaster_direction if omitted).",
     )
 
 

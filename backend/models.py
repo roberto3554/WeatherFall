@@ -45,6 +45,9 @@ class Node(Base):
     type: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
     x: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0.0)
     y: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=0.0)
+    tier: Mapped[Optional[str]] = mapped_column(String(30), nullable=True, default="Secondary")
+    capacity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=3)
+    battery_backup_hours: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=24.0)
 
     outgoing_edges: Mapped[list["Edge"]] = relationship(
         "Edge",
