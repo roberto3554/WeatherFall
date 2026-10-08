@@ -33,6 +33,12 @@
 
     --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
     --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+
+    /* War Room Reactive Glass Volumetric Lighting Variables */
+    --reactive-border-glow: rgba(56, 189, 248, 0.34);
+    --reactive-shadow-glow: rgba(6, 182, 212, 0.18);
+    --reactive-inset-glow: rgba(56, 189, 248, 0.06);
+    --reactive-ambient-vignette: rgba(6, 182, 212, 0.05);
 }
 
 * {
@@ -608,7 +614,7 @@ input[type="number"]:focus {
     position: absolute;
     top: 14px;
     right: 14px;
-    z-index: 15;
+    z-index: 1005;
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -1090,9 +1096,11 @@ body.resizing-drawer * {
 /* =========================================================
    ADMIN DASHBOARD (/admin)
    ========================================================= */
+html:has(body.admin-body),
 .admin-body {
-    overflow: auto;
-    height: auto;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    height: auto !important;
     min-height: 100dvh;
     background-color: var(--bg-slate);
 }
@@ -1102,8 +1110,7 @@ body.resizing-drawer * {
     justify-content: space-between;
     align-items: center;
     padding: 0.9rem 1.5rem;
-    background: var(--surface-glass);
-    backdrop-filter: blur(14px);
+    background: var(--surface-solid);
     border-bottom: 1px solid var(--border-subtle);
     flex-wrap: wrap;
     gap: 0.75rem;
@@ -1128,30 +1135,394 @@ body.resizing-drawer * {
     gap: 0.75rem;
 }
 
-.admin-layout {
+.admin-layout,
+.admin-gis-layout {
     display: grid;
-    grid-template-columns: 380px 1fr;
+    grid-template-columns: 1.45fr 1fr;
     gap: 1.25rem;
-    padding: 1.5rem;
-    max-width: 1400px;
+    padding: 1.25rem 1.5rem;
+    max-width: 1680px;
     margin: 0 auto;
+    align-items: start;
 }
-@media (max-width: 900px) {
-    .admin-layout {
+@media (max-width: 1100px) {
+    .admin-layout,
+    .admin-gis-layout {
         grid-template-columns: 1fr;
     }
 }
 
 .admin-panel {
-    background: var(--surface-glass);
-    backdrop-filter: blur(14px);
+    background: var(--surface-solid);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
-    padding: 1.25rem;
+    padding: 1.15rem;
     box-shadow: var(--shadow-card);
 }
-.admin-panel-wide {
+.admin-panel-wide,
+.admin-map-panel,
+.admin-inspector-panel {
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+}
+
+/* GIS Toolbar & Live OSM Search Controls */
+.gis-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 0.85rem;
+    padding-bottom: 0.8rem;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.gis-search-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 0.65rem;
+    flex: 1;
+}
+
+.gis-control-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    min-width: 230px;
+}
+
+.gis-control-item label {
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--cyan-bright);
+}
+
+.gis-action-btns {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.gis-btn {
+    padding: 0.52rem 0.95rem;
+    font-size: 0.8rem;
+    white-space: nowrap;
+}
+
+.gis-btn-secondary {
+    padding: 0.52rem 0.85rem;
+    font-size: 0.78rem;
+    white-space: nowrap;
+}
+
+.gis-mode-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.gis-checkbox-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+}
+
+.gis-checkbox-label input[type="checkbox"] {
+    accent-color: var(--primary);
+    width: 15px;
+    height: 15px;
+    cursor: pointer;
+}
+
+.edit-mode-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.5rem 0.85rem;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-strong);
+    background: rgba(148, 163, 184, 0.12);
+    color: var(--text-secondary);
+    font-family: var(--font-sans);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.18s ease;
+}
+.edit-mode-btn:hover {
+    border-color: var(--cyan-bright);
+    color: var(--text-primary);
+    background: rgba(56, 189, 248, 0.12);
+}
+.edit-mode-btn.active {
+    background: rgba(6, 182, 212, 0.22);
+    border-color: var(--cyan-bright);
+    color: #7dd3fc;
+    box-shadow: 0 0 14px rgba(56, 189, 248, 0.28);
+}
+
+/* Edit Mode Active Banner */
+.edit-mode-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.6rem 0.9rem;
+    border-radius: var(--radius-md);
+    background: rgba(6, 182, 212, 0.14);
+    border: 1px solid rgba(56, 189, 248, 0.4);
+    color: var(--text-primary);
+    font-size: 0.8rem;
+}
+.edit-banner-content {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+}
+.edit-pulse-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--cyan-bright);
+    box-shadow: 0 0 8px var(--cyan-bright);
+    flex-shrink: 0;
+}
+.banner-highlight {
+    color: var(--cyan-bright);
+    font-weight: 700;
+}
+.edit-cancel-btn {
+    background: rgba(15, 23, 42, 0.6);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-strong);
+    padding: 0.25rem 0.65rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.74rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.edit-cancel-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--danger);
+}
+
+/* Interactive Leaflet Map Container */
+.admin-map-container {
+    position: relative;
+    width: 100%;
+    height: 600px;
+    min-height: 500px;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    border: 1px solid var(--border-strong);
+    box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+#admin-map {
+    width: 100%;
+    height: 600px;
+    min-height: 500px;
+    background: #0b1120;
+    z-index: 1;
+    display: block;
+}
+
+.leaflet-container {
+    font-family: var(--font-sans) !important;
+    width: 100% !important;
+    height: 100% !important;
+}
+
+.leaflet-container img.leaflet-tile {
+    max-width: none !important;
+    max-height: none !important;
+    width: 256px !important;
+    height: 256px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+}
+
+.osm-gray-pin {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #94a3b8;
+    border: 2.5px solid #f8fafc;
+    color: #0f172a;
+    font-weight: 800;
+    font-size: 13px;
+    line-height: 1;
+    box-shadow: 0 0 0 2px #334155, 0 3px 10px rgba(0, 0, 0, 0.55);
+    transition: transform 0.15s ease, background-color 0.15s ease;
+}
+.osm-gray-pin:hover {
+    transform: scale(1.22);
+    background: #cbd5e1;
+}
+
+.gis-map-legend {
+    position: absolute;
+    bottom: 12px;
+    left: 12px;
+    z-index: 500;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.45rem 0.75rem;
+    background: var(--surface-solid);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    font-size: 0.73rem;
+    color: var(--text-secondary);
+    box-shadow: var(--shadow-card);
+}
+.gis-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-weight: 500;
+}
+.gis-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+}
+.gis-dot-osm       { background: #94a3b8; border: 2px solid #f8fafc; box-shadow: 0 0 0 1px #334155; }
+.gis-dot-energy    { background: var(--amber); }
+.gis-dot-water     { background: var(--cyan); }
+.gis-dot-health    { background: var(--emerald); }
+.gis-dot-transport { background: var(--orange); }
+.gis-dot-comms     { background: var(--violet); }
+
+/* Leaflet Popup Customization */
+.leaflet-popup-content-wrapper {
+    background: var(--surface-solid) !important;
+    color: var(--text-primary) !important;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md) !important;
+    box-shadow: var(--shadow-soft) !important;
+}
+.leaflet-popup-tip {
+    background: var(--surface-solid) !important;
+}
+.gis-popup {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    font-family: var(--font-sans);
+    padding: 0.15rem 0;
+}
+.gis-popup-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+.gis-popup-id {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-weight: 600;
+}
+.gis-popup-title {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    line-height: 1.3;
+}
+.gis-popup-coords,
+.gis-popup-meta {
+    font-size: 0.76rem;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+.gis-popup-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    margin-top: 0.25rem;
+}
+.gis-popup-btn-full {
+    width: 100%;
+    padding: 0.45rem 0.75rem;
+    font-size: 0.78rem;
+}
+.gis-connect-btn {
+    flex: 1;
+    padding: 0.42rem 0.65rem;
+    font-size: 0.75rem;
+}
+
+/* Inspector Tabs & Panels */
+.inspector-tabs {
+    display: flex;
+    gap: 0.45rem;
+    border-bottom: 1px solid var(--border-subtle);
+    padding-bottom: 0.65rem;
+}
+.inspector-tab {
+    flex: 1;
+    background: rgba(148, 163, 184, 0.1);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+    font-family: var(--font-sans);
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 0.5rem 0.75rem;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+.inspector-tab:hover {
+    color: var(--text-primary);
+    background: rgba(148, 163, 184, 0.18);
+}
+.inspector-tab.active {
+    background: rgba(59, 130, 246, 0.18);
+    border-color: var(--primary);
+    color: var(--text-primary);
+}
+
+.inspector-tab-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.inspector-search-row input {
+    width: 100%;
+}
+
+.manual-edge-bar {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr auto;
+    align-items: center;
+    gap: 0.45rem;
+}
+.edge-arrow-label {
+    color: var(--cyan-bright);
+    font-weight: 700;
+    font-size: 0.95rem;
+}
+.manual-edge-btn {
+    padding: 0.5rem 0.85rem;
+    font-size: 0.78rem;
+    white-space: nowrap;
 }
 
 .panel-title {
@@ -1163,29 +1534,6 @@ body.resizing-drawer * {
     padding-bottom: 0.6rem;
     border-bottom: 1px solid var(--border-subtle);
 }
-
-.node-form {
-    display: flex;
-    flex-direction: column;
-    gap: 0.9rem;
-}
-.form-row {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-}
-.form-row.two-col {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.75rem;
-}
-.form-actions {
-    display: flex;
-    gap: 0.55rem;
-    margin-top: 0.25rem;
-}
-.form-actions .run-button { flex: 2; }
-.form-actions .reset-button { flex: 1; }
 
 .form-msg {
     font-size: 0.8rem;
@@ -1204,9 +1552,14 @@ body.resizing-drawer * {
     background-color: rgba(239, 68, 68, 0.12);
     border-color: rgba(239, 68, 68, 0.35);
 }
+.form-msg-info {
+    color: #7dd3fc;
+    background-color: rgba(56, 189, 248, 0.12);
+    border-color: rgba(56, 189, 248, 0.35);
+}
 
 .nodes-table-wrapper {
-    max-height: 65vh;
+    max-height: 62vh;
     overflow-y: auto;
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
@@ -1215,7 +1568,7 @@ body.resizing-drawer * {
 .nodes-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 0.82rem;
+    font-size: 0.8rem;
 }
 .nodes-table thead th {
     position: sticky;
@@ -1224,15 +1577,15 @@ body.resizing-drawer * {
     color: var(--text-muted);
     font-weight: 600;
     text-transform: uppercase;
-    font-size: 0.7rem;
+    font-size: 0.68rem;
     letter-spacing: 0.05em;
     text-align: left;
-    padding: 0.65rem 0.85rem;
+    padding: 0.6rem 0.75rem;
     border-bottom: 1px solid var(--border-subtle);
     z-index: 1;
 }
 .nodes-table tbody td {
-    padding: 0.6rem 0.85rem;
+    padding: 0.55rem 0.75rem;
     border-bottom: 1px solid var(--border-subtle);
     vertical-align: middle;
 }
@@ -1240,18 +1593,36 @@ body.resizing-drawer * {
     border-bottom: none;
 }
 .nodes-table tbody tr:hover {
-    background-color: rgba(59, 130, 246, 0.06);
+    background-color: rgba(59, 130, 246, 0.08);
 }
-.cell-id { color: var(--text-muted); font-size: 0.75rem; }
+.clickable-row {
+    cursor: pointer;
+}
+.cell-id { color: var(--text-muted); font-size: 0.74rem; }
 .cell-name {
     color: var(--text-primary);
     font-weight: 500;
-    max-width: 280px;
+    max-width: 210px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.cell-num { color: var(--text-secondary); font-size: 0.76rem; }
+.cell-num { color: var(--text-secondary); font-size: 0.74rem; white-space: nowrap; }
+.cell-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+.cell-edge-route {
+    font-size: 0.77rem;
+    color: var(--text-primary);
+    line-height: 1.35;
+}
+.edge-arrow-inline {
+    color: var(--cyan-bright);
+    font-weight: 700;
+    margin: 0 0.25rem;
+}
 .table-empty {
     text-align: center;
     color: var(--text-muted);
@@ -1261,9 +1632,9 @@ body.resizing-drawer * {
 
 .type-badge {
     display: inline-block;
-    font-size: 0.68rem;
+    font-size: 0.66rem;
     font-weight: 600;
-    padding: 0.15rem 0.5rem;
+    padding: 0.14rem 0.48rem;
     border-radius: 999px;
     border: 1px solid currentColor;
     text-transform: uppercase;
@@ -1275,14 +1646,31 @@ body.resizing-drawer * {
 .type-health    { color: var(--emerald); }
 .type-comms     { color: var(--violet); }
 
+.connect-row-btn {
+    background: rgba(56, 189, 248, 0.12);
+    border: 1px solid rgba(56, 189, 248, 0.35);
+    color: var(--cyan-bright);
+    font-family: var(--font-sans);
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 0.24rem 0.55rem;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+.connect-row-btn:hover {
+    background: rgba(56, 189, 248, 0.24);
+    color: #ffffff;
+}
+
 .delete-btn {
     background: rgba(239, 68, 68, 0.1);
     border: 1px solid rgba(239, 68, 68, 0.3);
     color: #fca5a5;
     font-family: var(--font-sans);
-    font-size: 0.73rem;
+    font-size: 0.72rem;
     font-weight: 600;
-    padding: 0.25rem 0.6rem;
+    padding: 0.24rem 0.55rem;
     border-radius: var(--radius-sm);
     cursor: pointer;
     transition: all 0.15s ease;
@@ -1748,6 +2136,58 @@ body[data-theme="light"] {
     background-color: rgba(239, 68, 68, 0.1);
     border-color: rgba(239, 68, 68, 0.35);
 }
+[data-theme="light"] .form-msg-info {
+    color: #0369a1;
+    background-color: rgba(2, 132, 199, 0.1);
+    border-color: rgba(2, 132, 199, 0.35);
+}
+[data-theme="light"] #admin-map {
+    background: #e2e8f0;
+}
+[data-theme="light"] .edit-mode-btn {
+    background: #f8fafc;
+    color: #334155;
+    border-color: rgba(15, 23, 42, 0.18);
+}
+[data-theme="light"] .edit-mode-btn:hover {
+    background: rgba(2, 132, 199, 0.1);
+    border-color: #0284c7;
+    color: #0f172a;
+}
+[data-theme="light"] .edit-mode-btn.active {
+    background: rgba(2, 132, 199, 0.15);
+    border-color: #0284c7;
+    color: #0369a1;
+}
+[data-theme="light"] .edit-mode-banner {
+    background: rgba(2, 132, 199, 0.1);
+    border-color: rgba(2, 132, 199, 0.35);
+}
+[data-theme="light"] .edit-cancel-btn {
+    background: #ffffff;
+    color: #334155;
+    border-color: rgba(15, 23, 42, 0.2);
+}
+[data-theme="light"] .inspector-tab {
+    background: #f1f5f9;
+    color: #475569;
+    border-color: rgba(15, 23, 42, 0.12);
+}
+[data-theme="light"] .inspector-tab.active {
+    background: rgba(37, 99, 235, 0.12);
+    border-color: #2563eb;
+    color: #1d4ed8;
+}
+[data-theme="light"] .connect-row-btn {
+    background: rgba(2, 132, 199, 0.1);
+    border-color: rgba(2, 132, 199, 0.32);
+    color: #0369a1;
+}
+[data-theme="light"] .connect-row-btn:hover {
+    background: #0284c7;
+    border-color: #0284c7;
+    color: #ffffff;
+}
 [data-theme="light"] .nodes-table-wrapper {
     background-color: #ffffff;
     border-color: rgba(15, 23, 42, 0.12);
@@ -1794,4 +2234,663 @@ body[data-theme="light"] {
     background-color: #dc2626;
     border-color: #dc2626;
     color: #ffffff;
+}
+
+/* =========================================================
+   MAIN COMMAND CENTER LEAFLET MAP MARKERS & ANIMATIONS
+   ========================================================= */
+.wf-leaflet-div-icon {
+    background: transparent !important;
+    border: none !important;
+}
+
+.wf-node-marker {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    transform: translate(-50%, -20px);
+    pointer-events: auto;
+    cursor: pointer;
+    user-select: none;
+}
+
+.wf-node-badge-wrap {
+    position: relative;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    filter: drop-shadow(0 3px 8px rgba(2, 6, 23, 0.65));
+    transition: transform 0.2s ease;
+}
+
+.wf-node-marker:hover .wf-node-badge-wrap {
+    transform: scale(1.12);
+}
+
+.wf-node-label {
+    margin-top: 2px;
+    padding: 2px 7px;
+    border-radius: 6px;
+    background: rgba(15, 23, 42, 0.88);
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    color: #f8fafc;
+    font-family: var(--font-sans);
+    font-size: 10.5px;
+    font-weight: 600;
+    line-height: 1.25;
+    text-align: center;
+    white-space: nowrap;
+    box-shadow: 0 2px 6px rgba(2, 6, 23, 0.55);
+    pointer-events: none;
+}
+
+.wf-node-status {
+    display: block;
+    font-size: 9.5px;
+    font-weight: 700;
+    margin-top: 1px;
+}
+
+.wf-shockwave-ring {
+    position: absolute;
+    inset: -8px;
+    border-radius: 50%;
+    border: 2.5px solid #ef4444;
+    box-shadow: 0 0 14px rgba(239, 68, 68, 0.85);
+    animation: wfShockwavePulse 1.4s ease-out infinite;
+    pointer-events: none;
+}
+
+.wf-saved-ring {
+    position: absolute;
+    inset: -7px;
+    border-radius: 50%;
+    border: 2.2px solid #38bdf8;
+    box-shadow: 0 0 14px rgba(56, 189, 248, 0.85);
+    animation: wfSavedPulse 1.6s ease-in-out infinite;
+    pointer-events: none;
+}
+
+@keyframes wfShockwavePulse {
+    0% {
+        transform: scale(0.85);
+        opacity: 0.95;
+    }
+    100% {
+        transform: scale(1.65);
+        opacity: 0;
+    }
+}
+
+@keyframes wfSavedPulse {
+    0%, 100% {
+        transform: scale(0.92);
+        opacity: 0.85;
+    }
+    50% {
+        transform: scale(1.28);
+        opacity: 0.35;
+    }
+}
+
+.wf-edge-arrow-icon {
+    background: transparent !important;
+    border: none !important;
+    pointer-events: none !important;
+}
+
+[data-theme="light"] .wf-node-badge-wrap {
+    filter: drop-shadow(0 2px 6px rgba(15, 23, 42, 0.24));
+}
+
+[data-theme="light"] .wf-node-label {
+    background: rgba(255, 255, 255, 0.94);
+    border-color: rgba(15, 23, 42, 0.16);
+    color: #0f172a;
+    box-shadow: 0 2px 6px rgba(15, 23, 42, 0.12);
+}
+
+/* =========================================================
+   HAZARD SCENARIO & SEVERITY LEVEL SELECTOR UI
+   ========================================================= */
+select optgroup {
+    background-color: #0f172a;
+    color: #38bdf8;
+    font-weight: 700;
+    font-size: 0.76rem;
+    letter-spacing: 0.03em;
+}
+
+select option {
+    background-color: #0f172a;
+    color: #f8fafc;
+    font-weight: 500;
+    padding: 0.35rem 0.5rem;
+}
+
+.hazard-cat-badge {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #38bdf8;
+    background: rgba(56, 189, 248, 0.12);
+    border: 1px solid rgba(56, 189, 248, 0.28);
+}
+
+.severity-badge {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    transition: all 0.18s ease;
+}
+
+.sev-level-1 {
+    color: #34d399;
+    background: rgba(16, 185, 129, 0.14);
+    border-color: rgba(16, 185, 129, 0.35);
+}
+
+.sev-level-2 {
+    color: #38bdf8;
+    background: rgba(56, 189, 248, 0.14);
+    border-color: rgba(56, 189, 248, 0.35);
+}
+
+.sev-level-3 {
+    color: #fbbf24;
+    background: rgba(245, 158, 11, 0.15);
+    border-color: rgba(245, 158, 11, 0.38);
+}
+
+.sev-level-4 {
+    color: #fb923c;
+    background: rgba(249, 115, 22, 0.16);
+    border-color: rgba(249, 115, 22, 0.42);
+}
+
+.sev-level-5 {
+    color: #f87171;
+    background: rgba(239, 68, 68, 0.16);
+    border-color: rgba(239, 68, 68, 0.45);
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.2);
+}
+
+.sev-level-custom {
+    color: #c084fc;
+    background: rgba(168, 85, 247, 0.15);
+    border-color: rgba(168, 85, 247, 0.38);
+}
+
+.severity-tier-bar {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 0.32rem;
+    margin-bottom: 0.15rem;
+}
+
+.sev-step {
+    appearance: none;
+    border: 1px solid var(--border-subtle);
+    background: rgba(15, 23, 42, 0.65);
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    padding: 0.32rem 0.2rem;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all 0.16s ease;
+    text-align: center;
+}
+
+.sev-step:hover {
+    border-color: rgba(148, 163, 184, 0.45);
+    color: var(--text-primary);
+    transform: translateY(-1px);
+}
+
+.sev-step[data-level="1"].filled {
+    background: rgba(16, 185, 129, 0.18);
+    border-color: rgba(16, 185, 129, 0.45);
+    color: #6ee7b7;
+}
+.sev-step[data-level="2"].filled {
+    background: rgba(56, 189, 248, 0.18);
+    border-color: rgba(56, 189, 248, 0.45);
+    color: #7dd3fc;
+}
+.sev-step[data-level="3"].filled {
+    background: rgba(245, 158, 11, 0.2);
+    border-color: rgba(245, 158, 11, 0.5);
+    color: #fcd34d;
+}
+.sev-step[data-level="4"].filled {
+    background: rgba(249, 115, 22, 0.22);
+    border-color: rgba(249, 115, 22, 0.55);
+    color: #fdba74;
+}
+.sev-step[data-level="5"].filled {
+    background: rgba(239, 68, 68, 0.24);
+    border-color: rgba(239, 68, 68, 0.65);
+    color: #fca5a5;
+}
+
+.sev-step.active {
+    box-shadow: 0 0 0 2px rgba(248, 250, 252, 0.22);
+    font-weight: 800;
+}
+
+.custom-magnitude-input {
+    margin-top: 0.25rem;
+}
+
+[data-theme="light"] select optgroup {
+    background-color: #f8fafc;
+    color: #0284c7;
+}
+
+[data-theme="light"] select option {
+    background-color: #ffffff;
+    color: #0f172a;
+}
+
+[data-theme="light"] .sev-step {
+    background: #f1f5f9;
+    border-color: rgba(15, 23, 42, 0.12);
+    color: #64748b;
+}
+
+[data-theme="light"] .sev-step[data-level="1"].filled {
+    background: rgba(16, 185, 129, 0.16);
+    border-color: rgba(5, 150, 105, 0.45);
+    color: #047857;
+}
+[data-theme="light"] .sev-step[data-level="2"].filled {
+    background: rgba(2, 132, 199, 0.15);
+    border-color: rgba(2, 132, 199, 0.45);
+    color: #0369a1;
+}
+[data-theme="light"] .sev-step[data-level="3"].filled {
+    background: rgba(245, 158, 11, 0.18);
+    border-color: rgba(217, 119, 6, 0.45);
+    color: #b45309;
+}
+[data-theme="light"] .sev-step[data-level="4"].filled {
+    background: rgba(249, 115, 22, 0.18);
+    border-color: rgba(234, 88, 12, 0.5);
+    color: #c2410c;
+}
+[data-theme="light"] .sev-step[data-level="5"].filled {
+    background: rgba(239, 68, 68, 0.18);
+    border-color: rgba(220, 38, 38, 0.55);
+    color: #b91c1c;
+}
+[data-theme="light"] .sev-step.active {
+    box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.18);
+}
+
+/* =========================================================
+   TASK 1: WAR ROOM CINEMATIC GRAPH RENDERING ON LEAFLET
+   (Flowing Data Lines & CRT / Digital Glitch Node Collapse)
+   ========================================================= */
+
+/* 1A. Flowing Data Lines on Active Edges */
+path.wf-edge-conduit {
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: stroke 0.28s ease, stroke-opacity 0.28s ease;
+}
+
+path.wf-edge-flow {
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    pointer-events: none;
+    will-change: stroke-dashoffset;
+}
+
+path.wf-edge-flow-active {
+    animation: wfEdgeDataFlow 1.25s linear infinite;
+    filter: drop-shadow(0 0 4px rgba(56, 189, 248, 0.55));
+}
+
+path.wf-edge-flow-survive {
+    animation: wfEdgeDataFlow 0.95s linear infinite;
+    filter: drop-shadow(0 0 6px rgba(16, 185, 129, 0.85));
+}
+
+path.wf-edge-flow-heal {
+    animation: wfEdgeDataFlowHeal 0.68s linear infinite;
+    filter: drop-shadow(0 0 8px rgba(56, 189, 248, 0.95));
+}
+
+path.wf-edge-flow-severed {
+    animation: wfEdgeSeveredSpark 1.1s steps(2, end) infinite;
+    filter: drop-shadow(0 0 6px rgba(239, 68, 68, 0.85));
+}
+
+@keyframes wfEdgeDataFlow {
+    from {
+        stroke-dashoffset: 44;
+    }
+    to {
+        stroke-dashoffset: 0;
+    }
+}
+
+@keyframes wfEdgeDataFlowHeal {
+    from {
+        stroke-dashoffset: 48;
+    }
+    to {
+        stroke-dashoffset: 0;
+    }
+}
+
+@keyframes wfEdgeSeveredSpark {
+    0%, 100% {
+        stroke-dashoffset: 0;
+        opacity: 0.88;
+    }
+    50% {
+        stroke-dashoffset: 7;
+        opacity: 0.35;
+    }
+}
+
+.wf-arrow-severed {
+    filter: drop-shadow(0 0 5px rgba(239, 68, 68, 0.9));
+    animation: wfEdgeSeveredSpark 0.9s steps(2, end) infinite;
+}
+
+/* 1B. Digital Glitch / CRT Distortion Effect on Failed Nodes */
+.wf-badge-core {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.wf-node-glitch-burst {
+    animation: wfContainerGlitchBurst 0.92s cubic-bezier(0.25, 0.46, 0.45, 0.94) 1;
+}
+
+.wf-node-glitch-container .wf-badge-core {
+    animation: wfCrtResidualFlicker 2.2s steps(4, end) infinite;
+}
+
+.wf-badge-crt-burst .wf-badge-core {
+    animation: wfCrtBadgeCollapse 0.88s steps(2, end) 2, wfCrtResidualFlicker 2.2s steps(4, end) 1.76s infinite;
+}
+
+.wf-badge-crt-distort {
+    filter: drop-shadow(0 0 12px rgba(239, 68, 68, 0.82)) drop-shadow(-2px 0 4px rgba(56, 189, 248, 0.55));
+}
+
+.wf-crt-scanlines {
+    position: absolute;
+    inset: -5px;
+    border-radius: 50%;
+    z-index: 4;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+        0deg,
+        rgba(239, 68, 68, 0.0) 0px,
+        rgba(239, 68, 68, 0.0) 2px,
+        rgba(239, 68, 68, 0.36) 2px,
+        rgba(2, 6, 23, 0.55) 4px
+    );
+    border: 1.5px dashed rgba(239, 68, 68, 0.78);
+    box-shadow: 0 0 14px rgba(239, 68, 68, 0.65), inset 0 0 8px rgba(239, 68, 68, 0.45);
+    animation: wfScanlineFlicker 0.45s steps(3, end) infinite;
+}
+
+.wf-crt-tear-bar {
+    position: absolute;
+    left: -6px;
+    right: -6px;
+    height: 3px;
+    z-index: 5;
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, rgba(56, 189, 248, 0.95), rgba(239, 68, 68, 0.95), transparent);
+    mix-blend-mode: screen;
+    animation: wfCrtTearSweep 1.1s linear infinite;
+}
+
+.wf-glitch-layer {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    z-index: 3;
+    opacity: 0.78;
+    mix-blend-mode: screen;
+}
+
+.wf-glitch-cyan {
+    filter: hue-rotate(175deg) saturate(240%) drop-shadow(-2px 0 0 #38bdf8);
+    animation: wfGlitchSliceCyan 0.65s steps(2, end) infinite;
+}
+
+.wf-glitch-red {
+    filter: hue-rotate(-30deg) saturate(260%) drop-shadow(2px 0 0 #ef4444);
+    animation: wfGlitchSliceRed 0.55s steps(2, end) infinite;
+}
+
+.wf-label-glitch {
+    border-color: rgba(239, 68, 68, 0.65) !important;
+    box-shadow: 0 0 12px rgba(239, 68, 68, 0.45), -1.5px 0 0 rgba(56, 189, 248, 0.55), 1.5px 0 0 rgba(239, 68, 68, 0.65) !important;
+    animation: wfLabelCrtJitter 1.8s steps(2, end) infinite;
+}
+
+@keyframes wfContainerGlitchBurst {
+    0%   { transform: translate(-50%, -20px) scale(1); }
+    14%  { transform: translate(calc(-50% - 5px), -22px) skewX(-14deg) scale(1.12, 0.9); }
+    28%  { transform: translate(calc(-50% + 6px), -18px) skewX(12deg) scale(0.92, 1.1); }
+    42%  { transform: translate(calc(-50% - 4px), -20px) skewX(-8deg) scale(1.06); }
+    58%  { transform: translate(calc(-50% + 4px), -21px) skewX(9deg) scale(0.96); }
+    76%  { transform: translate(calc(-50% - 2px), -19px) skewX(-4deg); }
+    100% { transform: translate(-50%, -20px) scale(1); }
+}
+
+@keyframes wfCrtBadgeCollapse {
+    0%   { transform: translate(0, 0) scale(1); filter: brightness(1.8) contrast(1.5); }
+    20%  { transform: translate(-4px, 1px) skewX(-16deg) scaleY(0.84); filter: hue-rotate(40deg) brightness(1.5); }
+    40%  { transform: translate(4px, -2px) skewX(14deg) scaleX(1.14); filter: invert(0.25) contrast(1.8); }
+    60%  { transform: translate(-3px, 2px) skewY(-8deg); filter: brightness(0.75) saturate(2.2); }
+    80%  { transform: translate(3px, -1px) skewX(-10deg); filter: brightness(1.4); }
+    100% { transform: translate(0, 0) scale(1); filter: brightness(1); }
+}
+
+@keyframes wfCrtResidualFlicker {
+    0%, 100% { transform: translate(0, 0); opacity: 1; }
+    33%      { transform: translate(-1.2px, 0.4px) skewX(-2deg); opacity: 0.92; }
+    66%      { transform: translate(1.2px, -0.4px) skewX(2deg); opacity: 0.84; }
+    82%      { transform: translate(-2px, 0px) scaleY(0.95); opacity: 0.72; }
+}
+
+@keyframes wfGlitchSliceCyan {
+    0%   { clip-path: inset(8% 0 62% 0); transform: translate(-3.5px, -1px); }
+    33%  { clip-path: inset(58% 0 12% 0); transform: translate(3.5px, 1px); }
+    66%  { clip-path: inset(28% 0 42% 0); transform: translate(-2.5px, 0); }
+    100% { clip-path: inset(72% 0 6% 0); transform: translate(2.5px, -1px); }
+}
+
+@keyframes wfGlitchSliceRed {
+    0%   { clip-path: inset(62% 0 10% 0); transform: translate(3.5px, 1px); }
+    33%  { clip-path: inset(14% 0 56% 0); transform: translate(-3.5px, -1px); }
+    66%  { clip-path: inset(44% 0 24% 0); transform: translate(2.5px, 0); }
+    100% { clip-path: inset(10% 0 68% 0); transform: translate(-2.5px, 1px); }
+}
+
+@keyframes wfScanlineFlicker {
+    0%, 100% { opacity: 0.82; transform: scale(1); }
+    50%      { opacity: 0.48; transform: scale(1.04); }
+}
+
+@keyframes wfCrtTearSweep {
+    0%   { top: 4px; opacity: 0; }
+    15%  { opacity: 0.95; }
+    50%  { top: 20px; opacity: 0.75; }
+    85%  { opacity: 0.95; }
+    100% { top: 36px; opacity: 0; }
+}
+
+@keyframes wfLabelCrtJitter {
+    0%, 92%, 100% { transform: translate(0, 0); }
+    94%           { transform: translate(-1.5px, 0.5px) skewX(-3deg); }
+    97%           { transform: translate(1.5px, -0.5px) skewX(3deg); }
+}
+
+/* =========================================================
+   TASK 2: STATE-REACTIVE VOLUMETRIC LIGHTING ('REACTIVE GLASS')
+   ========================================================= */
+
+/* Bind UI panels' borders and volumetric box-shadows to reactive CSS variables */
+.sidebar {
+    border-right: 1px solid var(--reactive-border-glow);
+    box-shadow:
+        var(--shadow-soft),
+        0 0 32px var(--reactive-shadow-glow),
+        inset 0 0 22px var(--reactive-inset-glow);
+    transition: border-color 0.45s ease, box-shadow 0.45s ease, background-color 0.35s ease;
+}
+
+.console-drawer {
+    border-top: 1px solid var(--reactive-border-glow);
+    box-shadow:
+        0 -8px 25px rgba(2, 6, 23, 0.42),
+        0 -4px 34px var(--reactive-shadow-glow),
+        inset 0 0 22px var(--reactive-inset-glow);
+    transition: height 0.25s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.45s ease, box-shadow 0.45s ease;
+}
+
+.telemetry-panel,
+.canvas-legend,
+.auth-bar {
+    border-color: var(--reactive-border-glow);
+    box-shadow:
+        var(--shadow-card),
+        0 0 20px var(--reactive-shadow-glow),
+        inset 0 0 14px var(--reactive-inset-glow);
+    transition: border-color 0.45s ease, box-shadow 0.45s ease;
+}
+
+/* Ambient volumetric perimeter vignette inside map viewport */
+.canvas-wrapper::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 900;
+    box-shadow: inset 0 0 68px var(--reactive-ambient-vignette);
+    transition: box-shadow 0.5s ease;
+}
+
+/* Elevated Cascade Warning State (0% < failed <= 30%) */
+body[data-warroom-state="elevated"] .feed-pulse-dot {
+    background-color: #f59e0b;
+    box-shadow: 0 0 10px #f59e0b;
+}
+
+/* Critical Cascade Alert State (> 30% of nodes failed): Pulsing Urgent Crimson Red */
+body[data-warroom-state="critical"] .sidebar {
+    animation: warRoomCrimsonSidebarPulse 1.85s ease-in-out infinite;
+}
+
+body[data-warroom-state="critical"] .console-drawer {
+    animation: warRoomCrimsonDrawerPulse 1.85s ease-in-out infinite;
+}
+
+body[data-warroom-state="critical"] .telemetry-panel,
+body[data-warroom-state="critical"] .canvas-legend {
+    animation: warRoomCrimsonCardPulse 1.85s ease-in-out infinite;
+}
+
+body[data-warroom-state="critical"] .canvas-wrapper::after {
+    animation: warRoomVignetteCrimsonPulse 1.85s ease-in-out infinite;
+}
+
+body[data-warroom-state="critical"] .feed-pulse-dot {
+    background-color: #ef4444;
+    box-shadow: 0 0 12px #ef4444;
+    animation: warRoomDotFlash 0.9s ease-in-out infinite;
+}
+
+body[data-warroom-state="critical"] .brand-badge {
+    border-color: rgba(239, 68, 68, 0.65);
+    color: #f87171;
+    background: linear-gradient(135deg, rgba(239, 68, 68, 0.28), rgba(185, 28, 28, 0.22));
+    box-shadow: 0 0 16px rgba(239, 68, 68, 0.42);
+}
+
+@keyframes warRoomCrimsonSidebarPulse {
+    0%, 100% {
+        border-right-color: rgba(239, 68, 68, 0.52);
+        box-shadow:
+            var(--shadow-soft),
+            0 0 26px rgba(239, 68, 68, 0.24),
+            inset 0 0 18px rgba(239, 68, 68, 0.08);
+    }
+    50% {
+        border-right-color: rgba(248, 113, 113, 0.92);
+        box-shadow:
+            var(--shadow-soft),
+            0 0 46px rgba(239, 68, 68, 0.52),
+            inset 0 0 30px rgba(239, 68, 68, 0.18);
+    }
+}
+
+@keyframes warRoomCrimsonDrawerPulse {
+    0%, 100% {
+        border-top-color: rgba(239, 68, 68, 0.52);
+        box-shadow:
+            0 -8px 25px rgba(2, 6, 23, 0.45),
+            0 -4px 28px rgba(239, 68, 68, 0.26),
+            inset 0 0 18px rgba(239, 68, 68, 0.08);
+    }
+    50% {
+        border-top-color: rgba(248, 113, 113, 0.95);
+        box-shadow:
+            0 -8px 25px rgba(2, 6, 23, 0.55),
+            0 -6px 48px rgba(239, 68, 68, 0.55),
+            inset 0 0 30px rgba(239, 68, 68, 0.18);
+    }
+}
+
+@keyframes warRoomCrimsonCardPulse {
+    0%, 100% {
+        border-color: rgba(239, 68, 68, 0.45);
+        box-shadow:
+            var(--shadow-card),
+            0 0 16px rgba(239, 68, 68, 0.22),
+            inset 0 0 12px rgba(239, 68, 68, 0.07);
+    }
+    50% {
+        border-color: rgba(248, 113, 113, 0.88);
+        box-shadow:
+            var(--shadow-card),
+            0 0 30px rgba(239, 68, 68, 0.46),
+            inset 0 0 20px rgba(239, 68, 68, 0.15);
+    }
+}
+
+@keyframes warRoomVignetteCrimsonPulse {
+    0%, 100% {
+        box-shadow: inset 0 0 65px rgba(220, 38, 38, 0.14);
+    }
+    50% {
+        box-shadow: inset 0 0 105px rgba(239, 68, 68, 0.30);
+    }
+}
+
+@keyframes warRoomDotFlash {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50%      { transform: scale(1.35); opacity: 0.55; }
 }
