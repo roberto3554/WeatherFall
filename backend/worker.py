@@ -433,8 +433,9 @@ async def execute_simulation_cascade(
             sim_payload.get("trajectory") or sim_payload.get("disaster_direction") or "Coastal"
         ).strip()
 
+        initial_crews: int = max(0, int(sim_payload.get("active_repair_crews", 3)))
         remaining_budget: float = max(0.0, float(sim_payload.get("emergency_budget", 5000000.0)))
-        remaining_crews: int = max(0, int(sim_payload.get("active_repair_crews", 3)))
+        remaining_crews: int = initial_crews
 
         supplier_nodes_list: list[dict[str, Any]] = [
             {
@@ -504,6 +505,24 @@ async def execute_simulation_cascade(
                 node_id=target_node_id,
             )
             heapq.heappush(event_heap, (ev_obj.event_time, prio, event_seq, ev_obj, meta))
+
+        def _get_next_crew_slot(current_T: float) -> tuple[float | None, dict[str, Any] | None, int]:
+            """
+            Task 2: Finds the closest `event_time` in `event_heap` for a `RECOVERY_COMPLETED`
+            event that still has unreserved crew capacity (`crews_used - reserved_crews > 0`).
+            Returns `(next_crew_available_at, event_meta, available_crews_from_event)`.
+            """
+            for ev_time, _prio, _seq, ev_obj, ev_meta in sorted(event_heap, key=lambda x: (x[0], x[1], x[2])):
+                if ev_obj.event_type != "RECOVERY_COMPLETED":
+                    continue
+                if node_states.get(ev_obj.node_id) != "CRITICAL_BATTERY":
+                    continue
+                crews_total = int(ev_meta.get("crews_used", 1))
+                crews_reserved = int(ev_meta.get("reserved_crews", 0))
+                avail = crews_total - crews_reserved
+                if avail > 0 and float(ev_time) >= current_T:
+                    return round(float(ev_time), 2), ev_meta, avail
+            return None, None, 0
 
         epicenter_type = _normalize_sector_type(graph.nodes[chosen_id].get("type", "unknown"))
         epicenter_svi = round(
@@ -687,6 +706,8 @@ async def execute_simulation_cascade(
                 batch_entry["candidate_nodes"] = candidate_nodes
                 failing_nodes_batch.append(batch_entry)
 
+            had_immediate_crews_at_wave_start = remaining_crews > 0
+            initial_next_crew_at, _, _ = _get_next_crew_slot(current_T)
             rep_deadline = failing_nodes_batch[0]["battery_deadline"]
             batch_decisions = await evaluate_batch_failures(
                 failing_nodes_batch=failing_nodes_batch,
@@ -694,13 +715,25 @@ async def execute_simulation_cascade(
                 remaining_crews=remaining_crews,
                 current_time_T=current_T,
                 battery_deadline=rep_deadline,
+                next_crew_available_at=initial_next_crew_at if remaining_crews == 0 else None,
             )
 
             decisions_by_node: dict[str, dict[str, Any]] = {
                 str(d.get("node_id")): d for d in batch_decisions if isinstance(d, dict) and d.get("node_id")
             }
 
-            for item in failing_nodes_batch:
+            # Order batch so nodes selected for immediate save claim available immediate crews first,
+            # followed by remaining nodes which can be evaluated via Look-Ahead Crew Scheduling once remaining_crews == 0
+            ordered_batch = sorted(
+                failing_nodes_batch,
+                key=lambda x: (
+                    0 if bool(decisions_by_node.get(x["node_id"], {}).get("status", False)) else 1,
+                    0 if float(x.get("svi_score", 0.5)) > 0.75 else 1,
+                    -int(x.get("population_served", 0)),
+                ),
+            )
+
+            for item in ordered_batch:
                 child_name = item["node_id"]
                 child_type = item["node_type"]
                 child_svi = float(item["svi_score"])
@@ -715,6 +748,43 @@ async def execute_simulation_cascade(
 
                 decision = decisions_by_node.get(child_name, {})
                 want_save = bool(decision.get("status", False))
+
+                # Task 2: If immediate crews are 0 and a crew will be freed at `slot_time`,
+                # evaluate this node under Look-Ahead Crew Scheduling against the current unreserved slot
+                slot_time, slot_meta, slot_avail = _get_next_crew_slot(current_T)
+                if remaining_crews == 0 and candidate_nodes:
+                    if slot_time is not None and (
+                        had_immediate_crews_at_wave_start
+                        or not want_save
+                        or slot_time != initial_next_crew_at
+                    ):
+                        lookahead_decisions = await evaluate_batch_failures(
+                            failing_nodes_batch=[item],
+                            remaining_budget=remaining_budget,
+                            remaining_crews=0,
+                            current_time_T=current_T,
+                            battery_deadline=battery_deadline,
+                            next_crew_available_at=slot_time,
+                        )
+                        if lookahead_decisions and isinstance(lookahead_decisions[0], dict):
+                            decision = lookahead_decisions[0]
+                            decisions_by_node[child_name] = decision
+                            want_save = bool(decision.get("status", False))
+                    elif slot_time is None and want_save:
+                        want_save = False
+                        decision = {
+                            "node_id": child_name,
+                            "status": False,
+                            "reasoning": (
+                                f"Abandoned (Resource Exhausted at T+{current_T:.2f}h): 0 immediate repair crews "
+                                f"available and all upcoming crew release slots are already reserved for "
+                                f"higher-priority facilities."
+                            ),
+                            "recovery_command": None,
+                            "new_edge": None,
+                        }
+                        decisions_by_node[child_name] = decision
+
                 reasoning = str(
                     decision.get("reasoning")
                     or f"Node {child_name} ({child_type}, SVI {child_svi:.2f}, pop {child_pop:,}) entered CRITICAL_BATTERY at T+{current_T:.2f}h."
@@ -814,10 +884,11 @@ async def execute_simulation_cascade(
                         field_restoration_hours = round(rec_time / 60.0, 2)
                         remaining_window_h = round(max(0.0, battery_deadline - current_T), 2)
 
+                        # Case A: Immediate crew dispatch (remaining_crews >= crews_used)
                         if (
-                            field_restoration_hours < remaining_window_h
+                            remaining_crews >= crews_used
+                            and field_restoration_hours < remaining_window_h
                             and est_cost <= remaining_budget
-                            and crews_used <= remaining_crews
                         ):
                             remaining_budget = max(0.0, round(remaining_budget - float(est_cost), 2))
                             remaining_crews = max(0, remaining_crews - crews_used)
@@ -864,8 +935,77 @@ async def execute_simulation_cascade(
                                     "recovery_time_ms": rec_time,
                                     "reasoning": reasoning,
                                     "recovery_command": recovery_command,
+                                    "reserved_crews": 0,
+                                    "handoff_crews": 0,
                                 },
                             )
+
+                        # Case B: Look-Ahead Crew Scheduling when remaining_crews == 0
+                        elif remaining_crews == 0 and est_cost <= remaining_budget:
+                            slot_time, slot_meta, slot_avail = _get_next_crew_slot(current_T)
+                            if (
+                                slot_time is not None
+                                and slot_meta is not None
+                                and round(slot_time + field_restoration_hours, 2) < battery_deadline
+                            ):
+                                queued_crews = min(crews_used, max(1, slot_avail))
+                                remaining_budget = max(0.0, round(remaining_budget - float(est_cost), 2))
+                                slot_meta["reserved_crews"] = int(slot_meta.get("reserved_crews", 0)) + queued_crews
+                                slot_meta["handoff_crews"] = int(slot_meta.get("handoff_crews", 0)) + queued_crews
+                                rec_display = format_recovery_duration(rec_time)
+                                recovery_completion_T = round(slot_time + field_restoration_hours, 2)
+                                scheduled_recovery = True
+                                scheduled_eta_T = recovery_completion_T
+
+                                if "queued pending crew arrival" not in reasoning.lower():
+                                    reasoning = (
+                                        f"Repair is queued pending crew arrival at T+{slot_time:.2f}h "
+                                        f"(completes at T+{recovery_completion_T:.2f}h < deadline T+{battery_deadline:.2f}h). "
+                                        f"{reasoning}"
+                                    )
+
+                                validated_new_edge = {
+                                    "source": resolved_source,
+                                    "target": target_node,
+                                    "cost": est_cost,
+                                    "crews_used": queued_crews,
+                                    "estimated_cost": est_cost,
+                                    "recovery_time_ms": rec_time,
+                                    "field_restoration_hours": field_restoration_hours,
+                                    "recovery_time_display": rec_display,
+                                    "queued_for_crew_at": slot_time,
+                                }
+                                recovery_command = (
+                                    f"QUEUE {queued_crews} CREW(S) FOR T+{slot_time:.2f}h: REROUTE "
+                                    f"{resolved_source} -> {target_node} "
+                                    f"[ETA T+{recovery_completion_T:.2f}h < DEADLINE T+{battery_deadline:.2f}h | SVI={child_svi:.2f} | COST=${est_cost:,}]"
+                                )
+
+                                _push_des_event(
+                                    ev_time=recovery_completion_T,
+                                    ev_type="RECOVERY_COMPLETED",
+                                    target_node_id=child_name,
+                                    meta={
+                                        "node_id": child_name,
+                                        "node_type": child_type,
+                                        "svi_score": child_svi,
+                                        "population_served": child_pop,
+                                        "parent_node": parent_name,
+                                        "missing_dependency_type": missing_dependency_type,
+                                        "chosen_dist_m": chosen_dist_m,
+                                        "bfs_depth": wave_depth,
+                                        "battery_backup_hours": battery_hours,
+                                        "battery_deadline": battery_deadline,
+                                        "new_edge": validated_new_edge,
+                                        "cost": est_cost,
+                                        "crews_used": queued_crews,
+                                        "recovery_time_ms": rec_time,
+                                        "reasoning": reasoning,
+                                        "recovery_command": recovery_command,
+                                        "reserved_crews": 0,
+                                        "handoff_crews": 0,
+                                    },
+                                )
 
                 if not scheduled_recovery and child_name in battery_depletion_meta:
                     battery_depletion_meta[child_name]["abandon_reasoning"] = reasoning
@@ -930,6 +1070,13 @@ async def execute_simulation_cascade(
                     routing_distance=meta["chosen_dist_m"],
                 )
 
+                # Task 1 & Task 3: Dynamic Resource Release — return crews_used back to active_repair_crews pool
+                crews_released = max(1, int(meta.get("crews_used", 1)))
+                remaining_crews = min(initial_crews, remaining_crews + crews_released)
+                crew_release_notice = (
+                    f"Crew released. Remaining Budget: ${remaining_budget:,.0f} | Crews Left: {remaining_crews}"
+                )
+
                 execution_trace.append(
                     {
                         "step": "cascade",
@@ -950,8 +1097,9 @@ async def execute_simulation_cascade(
                         "status": True,
                         "reasoning": (
                             f"RECOVERY_COMPLETED at T+{T:.2f}h (beat battery deadline T+{meta['battery_deadline']:.2f}h): "
-                            f"{meta['reasoning']}"
+                            f"{meta['reasoning']} {crew_release_notice}"
                         ),
+                        "crew_release_notice": crew_release_notice,
                         "recovery_command": meta["recovery_command"],
                         "estimated_cost": meta["cost"],
                         "crews_used": meta["crews_used"],
@@ -961,6 +1109,11 @@ async def execute_simulation_cascade(
                         "new_edge": new_edge_obj,
                     }
                 )
+
+                # If a look-ahead queued repair was waiting for this freed crew at T, hand off the crew now
+                handoff_crews = int(meta.get("handoff_crews", 0))
+                if handoff_crews > 0:
+                    remaining_crews = max(0, remaining_crews - handoff_crews)
 
             elif ev.event_type == "BATTERY_DEPLETED":
                 simultaneous_depletions: list[tuple[Event, dict[str, Any]]] = [(ev, meta)]

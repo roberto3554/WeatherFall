@@ -210,40 +210,40 @@ def compute_realistic_recovery_metrics(
     #    base switching/setup time (min), and per-km field crew routing time (min/km)
     lifeline_profiles: dict[str, tuple[float, float, float, float]] = {
         # HV/MV tie-line switching, mobile substation/generator dispatch, line clearance
-        "energy": (28000.0, 14.5, 24.0, 14.0),
+        "energy": (28000.0, 14.5, 16.0, 5.5),
         # High-pressure main valving, mobile booster pumping, backflow/chlorination check
-        "water": (34000.0, 18.0, 32.0, 18.0),
+        "water": (34000.0, 18.0, 20.0, 6.5),
         # Dark-fiber ring optical failover, microwave relay alignment, emergency COW cutover
-        "comms": (14000.0, 6.5, 14.0, 6.0),
+        "comms": (14000.0, 6.5, 10.0, 3.5),
         # Emergency corridor clearance & transit traction/signal rerouting
-        "transport": (24000.0, 11.0, 26.0, 12.0),
+        "transport": (24000.0, 11.0, 15.0, 5.0),
     }
     base_cost, cost_per_m, base_min, min_per_km = lifeline_profiles.get(
-        lifeline, (25000.0, 12.0, 22.0, 12.0)
+        lifeline, (25000.0, 12.0, 15.0, 5.0)
     )
 
     # 2. Target facility complexity multiplier & verification overhead (minutes)
     facility_profiles: dict[str, tuple[float, float]] = {
         # Hospital: life-safety NFPA 99 critical branch sync, sterile water pressure & telemetry check
-        "health": (1.35, 16.0),
+        "health": (1.35, 12.0),
         # Substation/Power plant: high-voltage synchrocheck, relay coordination & phased load pickup
-        "energy": (1.30, 18.0),
+        "energy": (1.30, 14.0),
         # Water treatment/pump station: high-head pump surge suppression & pressure stabilization
-        "water": (1.18, 12.0),
+        "water": (1.18, 10.0),
         # Transit/Airport/Port hub: intermodal signal & terminal life-safety cutover
-        "transport": (1.15, 10.0),
+        "transport": (1.15, 8.0),
         # Telecom/Data Center: dual-bus UPS transfer & BGP/optical convergence
-        "comms": (1.10, 6.0),
+        "comms": (1.10, 5.0),
     }
     facility_cost_mult, facility_overhead_min = facility_profiles.get(
-        target_sector, (1.15, 10.0)
+        target_sector, (1.15, 8.0)
     )
 
     # 3. Disaster severity & street intersection traversal complexity
     severity_mult = _extract_severity_multiplier(magnitude)
     intersections = max(2, int(route_path_nodes or round(dist / 140.0)))
     intersection_cost = intersections * 220.0
-    intersection_min = min(35.0, intersections * 0.45)
+    intersection_min = min(14.0, intersections * 0.22)
 
     # Secondary suppliers require extra load-balancing / step-up regulation (+8% cost, +10% time)
     tier_mult = 1.0 if str(candidate_tier).lower() == "primary" else 1.08
@@ -251,9 +251,9 @@ def compute_realistic_recovery_metrics(
     raw_cost = (base_cost + dist * cost_per_m + intersection_cost) * facility_cost_mult * severity_mult * tier_mult
     raw_minutes = (base_min + dist_km * min_per_km + facility_overhead_min + intersection_min) * severity_mult * tier_mult
 
-    # Round cost to nearest $100 for realistic engineering estimates, and clamp minutes to [12, 360]
+    # Round cost to nearest $100 for realistic engineering estimates, and clamp minutes to [12, 240]
     estimated_cost_usd = int(round(raw_cost / 100.0) * 100)
-    recovery_minutes = max(12, min(360, int(round(raw_minutes))))
+    recovery_minutes = max(12, min(240, int(round(raw_minutes))))
     return estimated_cost_usd, recovery_minutes, format_recovery_duration(recovery_minutes)
 
 
@@ -274,11 +274,11 @@ def compute_required_crews(
     sev = _extract_severity_multiplier(magnitude)
 
     crews = 1
-    if dist >= 3800.0 and lifeline in {"energy", "water", "transport"}:
+    if dist >= 9500.0 and lifeline in {"energy", "water", "transport"}:
         crews += 1
-    elif target_sector == "health" and dist >= 2800.0 and sev >= 1.25:
+    elif target_sector == "health" and dist >= 8500.0 and sev >= 1.25:
         crews += 1
-    if dist >= 7500.0 and sev >= 1.28:
+    if dist >= 16000.0 and sev >= 1.28:
         crews = min(3, crews + 1)
     return max(1, min(3, crews))
 
@@ -289,15 +289,20 @@ def _solve_knapsack_fallback(
     remaining_crews: int,
     current_time_T: float = 0.0,
     default_battery_deadline: float = 4.0,
+    next_crew_available_at: float | None = None,
 ) -> list[dict[str, Any]]:
     """
     Deterministic Multi-Objective Climate Justice + Time-Aware 2D Knapsack solver across:
-      1. Budget & Crews (2D Knapsack: sum(cost) <= remaining_budget, sum(crews) <= remaining_crews)
-      2. Time (DES Battery Window: field_restoration_hours < battery_deadline - current_time_T)
+      1. Budget & Crews (2D Knapsack: sum(cost) <= remaining_budget, sum(crews) <= remaining_crews,
+         or Look-Ahead Crew Scheduling when remaining_crews == 0 and next_crew_available_at is set)
+      2. Time (DES Battery Window: field_restoration_hours < battery_deadline - current_time_T,
+         or (next_crew_available_at + field_restoration_hours) < battery_deadline when queued)
       3. Human Impact (SVI > 0.75 or high population_served prioritized even at up to +30% higher cost)
     """
     budget_limit = max(0.0, float(remaining_budget))
     crews_limit = max(0, int(remaining_crews))
+    is_lookahead_mode = crews_limit == 0 and next_crew_available_at is not None
+    effective_crews_limit = 1 if is_lookahead_mode else crews_limit
 
     items: list[dict[str, Any]] = []
     for idx, node_info in enumerate(failing_nodes_batch):
@@ -316,13 +321,30 @@ def _solve_knapsack_fallback(
         population_served = int(node_info.get("population_served", 12000))
         node_T = float(node_info.get("current_time_T", current_time_T))
         node_deadline = float(node_info.get("battery_deadline", default_battery_deadline))
-        remaining_window_h = round(max(0.0, node_deadline - node_T), 2)
+        node_next_crew_T = (
+            float(node_info["next_crew_available_at"])
+            if node_info.get("next_crew_available_at") is not None
+            else (float(next_crew_available_at) if next_crew_available_at is not None else None)
+        )
+        dispatch_start_T = (
+            round(max(node_T, node_next_crew_T), 2)
+            if (is_lookahead_mode and node_next_crew_T is not None)
+            else node_T
+        )
+        remaining_window_h = round(max(0.0, node_deadline - dispatch_start_T), 2)
 
         candidates = [c for c in (node_info.get("candidate_nodes") or []) if isinstance(c, dict)]
-        # Filter candidates whose Field Restoration Time (hours) is strictly less than remaining battery time
+        # Filter candidates:
+        # - Immediate mode: Field Restoration Time < (battery_deadline - current_time_T)
+        # - Look-Ahead mode (remaining_crews == 0): (next_crew_available_at + Field Restoration Time) < battery_deadline
         time_viable_candidates = [
-            c for c in candidates
-            if float(c.get("field_restoration_hours", float(c.get("recovery_time_ms", 60)) / 60.0)) < remaining_window_h
+            c
+            for c in candidates
+            if (
+                dispatch_start_T
+                + float(c.get("field_restoration_hours", float(c.get("recovery_time_ms", 60)) / 60.0))
+            )
+            < node_deadline
         ]
         fastest_cand = (
             min(
@@ -336,9 +358,10 @@ def _solve_knapsack_fallback(
         best_cand = None
         if time_viable_candidates:
             resource_and_time_viable = [
-                c for c in time_viable_candidates
+                c
+                for c in time_viable_candidates
                 if int(c.get("estimated_cost", c.get("cost", 999999999))) <= budget_limit
-                and int(c.get("crews_used", 1)) <= crews_limit
+                and int(c.get("crews_used", 1)) <= effective_crews_limit
             ]
             pool = resource_and_time_viable if resource_and_time_viable else time_viable_candidates
             best_cand = min(
@@ -350,13 +373,14 @@ def _solve_knapsack_fallback(
                 ),
             )
 
-        # Ethical Directive weighting:
-        # Prioritize nodes with SVI > 0.75 or high population_served (>= 35,000),
-        # even if their estimated_cost is up to 30% higher than a lower-SVI node.
         is_high_svi = svi_score > 0.75
         is_high_pop = population_served >= 35000
-        ethical_multiplier = 1.0 + (0.65 if is_high_svi else (svi_score * 0.45)) + min(0.55, population_served / 120000.0)
-        ethical_utility = round(capacity * ethical_multiplier * 100.0 + (svi_score * 150.0) + (population_served / 500.0), 2)
+        ethical_multiplier = (
+            1.0 + (0.65 if is_high_svi else (svi_score * 0.45)) + min(0.55, population_served / 120000.0)
+        )
+        ethical_utility = round(
+            capacity * ethical_multiplier * 100.0 + (svi_score * 150.0) + (population_served / 500.0), 2
+        )
 
         items.append(
             {
@@ -370,6 +394,8 @@ def _solve_knapsack_fallback(
                 "is_high_pop": is_high_pop,
                 "ethical_utility": ethical_utility,
                 "node_T": node_T,
+                "dispatch_start_T": dispatch_start_T,
+                "node_next_crew_T": node_next_crew_T,
                 "node_deadline": node_deadline,
                 "remaining_window_h": remaining_window_h,
                 "has_any_candidates": bool(candidates),
@@ -380,20 +406,16 @@ def _solve_knapsack_fallback(
         )
 
     viable_items = [
-        it for it in items
+        it
+        for it in items
         if it["candidate"] is not None
         and int(it["candidate"].get("estimated_cost", it["candidate"].get("cost", 0))) <= budget_limit
-        and int(it["candidate"].get("crews_used", 1)) <= crews_limit
+        and int(it["candidate"].get("crews_used", 1)) <= effective_crews_limit
     ]
 
     chosen_indices: set[int] = set()
-    if viable_items and crews_limit > 0 and budget_limit > 0:
+    if viable_items and effective_crews_limit > 0 and budget_limit > 0:
         if len(viable_items) <= 14:
-            # Multi-objective score:
-            # 1. Count of high-equity priority nodes saved (SVI > 0.75 or high population_served)
-            # 2. Total ethical_utility (combining capacity, SVI, and population_served)
-            # 3. Equity-adjusted cost (discounting cost of SVI > 0.75 nodes by 30% so an SVI > 0.75 node
-            #    costing up to 30% more strictly beats a lower-SVI node of equal capacity)
             best_score: tuple[float, float, float] = (-1.0, -1.0, float("-inf"))
             best_subset: set[int] = set()
 
@@ -422,8 +444,7 @@ def _solve_knapsack_fallback(
                     cand = it["candidate"]
                     c_cost = int(cand.get("estimated_cost", cand.get("cost", 0)))
                     c_crews = int(cand.get("crews_used", 1))
-                    if used_cost + c_cost <= budget_limit and used_crews + c_crews <= crews_limit:
-                        # Discount effective cost by 30% (divide by 1.30) for SVI > 0.75 or high population_served
+                    if used_cost + c_cost <= budget_limit and used_crews + c_crews <= effective_crews_limit:
                         adj_c = (c_cost / 1.30) if (it["is_high_svi"] or it["is_high_pop"]) else float(c_cost)
                         eq_inc = 1 if (it["is_high_svi"] or it["is_high_pop"]) else 0
                         current_set.add(it["index"])
@@ -455,7 +476,7 @@ def _solve_knapsack_fallback(
                 cand = it["candidate"]
                 c_cost = int(cand.get("estimated_cost", cand.get("cost", 0)))
                 c_crews = int(cand.get("crews_used", 1))
-                if used_b + c_cost <= budget_limit and used_c + c_crews <= crews_limit:
+                if used_b + c_cost <= budget_limit and used_c + c_crews <= effective_crews_limit:
                     chosen_indices.add(it["index"])
                     used_b += c_cost
                     used_c += c_crews
@@ -463,7 +484,11 @@ def _solve_knapsack_fallback(
     saved_items = [items[i] for i in sorted(chosen_indices)]
     unchosen_items = [it for it in items if it["index"] not in chosen_indices and it["candidate"] is not None]
     min_batch_cost = min(
-        (int(it["candidate"].get("estimated_cost", it["candidate"].get("cost", 50000))) for it in items if it["candidate"] is not None),
+        (
+            int(it["candidate"].get("estimated_cost", it["candidate"].get("cost", 50000)))
+            for it in items
+            if it["candidate"] is not None
+        ),
         default=0,
     )
 
@@ -476,6 +501,8 @@ def _solve_knapsack_fallback(
         svi = it["svi_score"]
         pop = it["population_served"]
         node_T = it["node_T"]
+        dispatch_start_T = it["dispatch_start_T"]
+        node_next_crew_T = it["node_next_crew_T"]
         node_deadline = it["node_deadline"]
         rem_win_h = it["remaining_window_h"]
         cand = it["candidate"]
@@ -487,9 +514,8 @@ def _solve_knapsack_fallback(
             rec_min = int(cand.get("recovery_time_ms", cand.get("required_crew_time_min", 45)))
             rec_hours = round(float(cand.get("field_restoration_hours", rec_min / 60.0)), 2)
             rec_disp = str(cand.get("recovery_time_display") or format_recovery_duration(rec_min))
-            completion_T = round(node_T + rec_hours, 2)
+            completion_T = round(dispatch_start_T + rec_hours, 2)
 
-            # Calculate explicit ethical cost trade-off for reasoning
             lower_svi_alts = [u for u in unchosen_items if u["svi_score"] < svi]
             if lower_svi_alts:
                 alt = min(lower_svi_alts, key=lambda u: int(u["candidate"].get("estimated_cost", c_cost)))
@@ -499,11 +525,17 @@ def _solve_knapsack_fallback(
                     f"Absorbed ${absorbed_diff:,} higher cost to prioritize {node_id} ({node_type}) in "
                     f"SVI {svi:.2f} zone serving {pop:,} residents over lower-SVI {alt['node_id']} (SVI {alt['svi_score']:.2f})"
                 )
-            elif svi > 0.75 or pop >= 35000:
+            elif svi > 0.75:
                 absorbed_diff = max(int(c_cost - min_batch_cost), int(round(c_cost * 0.22)))
                 ethical_clause = (
                     f"Absorbed ${absorbed_diff:,} higher cost premium to prioritize high-vulnerability {node_id} "
                     f"in SVI {svi:.2f} zone serving {pop:,} residents (Ethical Directive SVI > 0.75)"
+                )
+            elif pop >= 35000:
+                absorbed_diff = max(int(c_cost - min_batch_cost), int(round(c_cost * 0.18)))
+                ethical_clause = (
+                    f"Absorbed ${absorbed_diff:,} higher cost premium to prioritize high-population {node_id} "
+                    f"serving {pop:,} residents (SVI {svi:.2f})"
                 )
             else:
                 ethical_clause = (
@@ -511,18 +543,36 @@ def _solve_knapsack_fallback(
                     f"(capacity={cap})"
                 )
 
+            if is_lookahead_mode and node_next_crew_T is not None:
+                reasoning_text = (
+                    f"Repair is queued pending crew arrival at T+{node_next_crew_T:.2f}h: {ethical_clause} — "
+                    f"rerouted via {src} (T+{node_next_crew_T:.2f}h + {rec_hours:.2f}h field restoration = "
+                    f"T+{completion_T:.2f}h < T+{node_deadline:.2f}h battery deadline; ${c_cost:,}, "
+                    f"{c_crews} crew{'s' if c_crews != 1 else ''})."
+                )
+                cmd_text = (
+                    f"QUEUE {c_crews} CREW(S) FOR T+{node_next_crew_T:.2f}h: REROUTE {src} -> {node_id} "
+                    f"[SVI={svi:.2f} | POP={pop:,} | ETA T+{completion_T:.2f}h < T+{node_deadline:.2f}h | COST=${c_cost:,}]"
+                )
+            else:
+                reasoning_text = (
+                    f"{ethical_clause} at T+{node_T:.2f}h — rerouted via {src} in {rec_hours:.2f}h ({rec_disp}) "
+                    f"before T+{node_deadline:.2f}h battery deadline (${c_cost:,}, {c_crews} crew{'s' if c_crews != 1 else ''})."
+                )
+                cmd_text = (
+                    f"DISPATCH {c_crews} CREW(S) AT T+{node_T:.2f}h: REROUTE {src} -> {node_id} "
+                    f"[SVI={svi:.2f} | POP={pop:,} | ETA T+{completion_T:.2f}h < T+{node_deadline:.2f}h | COST=${c_cost:,}]"
+                )
+
             decisions.append(
                 {
                     "node_id": node_id,
                     "status": True,
-                    "reasoning": (
-                        f"{ethical_clause} at T+{node_T:.2f}h — rerouted via {src} in {rec_hours:.2f}h ({rec_disp}) "
-                        f"before T+{node_deadline:.2f}h battery deadline (${c_cost:,}, {c_crews} crew{'s' if c_crews != 1 else ''})."
-                    ),
-                    "recovery_command": (
-                        f"DISPATCH {c_crews} CREW(S) AT T+{node_T:.2f}h: REROUTE {src} -> {node_id} "
-                        f"[SVI={svi:.2f} | POP={pop:,} | ETA T+{completion_T:.2f}h < T+{node_deadline:.2f}h | COST=${c_cost:,}]"
-                    ),
+                    "is_queued_crew": bool(is_lookahead_mode and node_next_crew_T is not None),
+                    "dispatch_start_T": dispatch_start_T,
+                    "completion_T": completion_T,
+                    "reasoning": reasoning_text,
+                    "recovery_command": cmd_text,
                     "new_edge": {
                         "source": src,
                         "target": node_id,
@@ -547,15 +597,23 @@ def _solve_knapsack_fallback(
                 f_hours = round(float(fc.get("field_restoration_hours", f_min / 60.0)), 2)
                 f_disp = str(fc.get("recovery_time_display") or format_recovery_duration(f_min))
                 f_src = str(fc.get("id") or fc.get("name"))
-                reason = (
-                    f"Abandoned (Battery Race Lost at T+{node_T:.2f}h): {node_id} (SVI {svi:.2f}, serving {pop:,} residents) "
-                    f"depletes battery at T+{node_deadline:.2f}h (window {rem_win_h:.2f}h), but fastest route from "
-                    f"{f_src} requires {f_hours:.2f}h ({f_disp}) >= {rem_win_h:.2f}h."
-                )
-            elif crews_limit <= 0 or budget_limit <= 0:
+                if is_lookahead_mode and node_next_crew_T is not None:
+                    projected_finish = round(node_next_crew_T + f_hours, 2)
+                    reason = (
+                        f"Abandoned (Look-Ahead Battery Race Lost at T+{node_T:.2f}h): {node_id} (SVI {svi:.2f}, serving {pop:,} residents) "
+                        f"depletes battery at T+{node_deadline:.2f}h, and next crew freed at T+{node_next_crew_T:.2f}h + fastest route "
+                        f"from {f_src} ({f_hours:.2f}h / {f_disp}) completes at T+{projected_finish:.2f}h >= T+{node_deadline:.2f}h."
+                    )
+                else:
+                    reason = (
+                        f"Abandoned (Battery Race Lost at T+{node_T:.2f}h): {node_id} (SVI {svi:.2f}, serving {pop:,} residents) "
+                        f"depletes battery at T+{node_deadline:.2f}h (window {rem_win_h:.2f}h), but fastest route from "
+                        f"{f_src} requires {f_hours:.2f}h ({f_disp}) >= {rem_win_h:.2f}h."
+                    )
+            elif effective_crews_limit <= 0 or budget_limit <= 0:
                 reason = (
                     f"Abandoned at T+{node_T:.2f}h: {node_id} (SVI {svi:.2f}, serving {pop:,} residents, battery deadline T+{node_deadline:.2f}h) "
-                    f"cannot be rescued — emergency repair crews ({crews_limit} left) or budget (${budget_limit:,.0f} left) exhausted."
+                    f"cannot be rescued — no in-flight repair crews or budget (${budget_limit:,.0f} left) available before battery depletion."
                 )
             else:
                 req_cost = int(cand.get("estimated_cost", cand.get("cost", 0))) if cand else 0
@@ -570,12 +628,15 @@ def _solve_knapsack_fallback(
                 reason = (
                     f"Climate Justice & Knapsack Trade-off at T+{node_T:.2f}h: Deprioritized {node_id} "
                     f"(SVI {svi:.2f}, {pop:,} residents, cost ${req_cost:,}, {req_crews} crew{'s' if req_crews != 1 else ''}) "
-                    f"in favor of {prioritized_str} under finite crew ({crews_limit}) and budget (${budget_limit:,.0f}) constraints."
+                    f"in favor of {prioritized_str} under finite crew and budget (${budget_limit:,.0f}) constraints."
                 )
             decisions.append(
                 {
                     "node_id": node_id,
                     "status": False,
+                    "is_queued_crew": False,
+                    "dispatch_start_T": dispatch_start_T,
+                    "completion_T": None,
                     "reasoning": reason,
                     "recovery_command": None,
                     "new_edge": None,
@@ -590,12 +651,15 @@ async def evaluate_batch_failures(
     remaining_crews: int,
     current_time_T: float = 0.0,
     battery_deadline: float = 4.0,
+    next_crew_available_at: float | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Climate Justice + Time-Aware DES + Knapsack batch evaluator.
+    Climate Justice + Time-Aware DES + Look-Ahead Crew Scheduling + Knapsack batch evaluator.
     Balances three constraints:
-      1. Budget/Crews (Knapsack: sum(cost) <= remaining_budget, sum(crews) <= remaining_crews)
-      2. Time (Battery vs. Repair Time: field_restoration_hours < battery_deadline - current_time_T)
+      1. Budget/Crews (Knapsack: sum(cost) <= remaining_budget, sum(crews) <= remaining_crews,
+         with Look-Ahead Crew Scheduling at `next_crew_available_at` when `remaining_crews == 0`)
+      2. Time (Battery vs. Repair Time: field_restoration_hours < battery_deadline - current_time_T,
+         or (next_crew_available_at + field_restoration_hours) < battery_deadline if queued)
       3. Human Impact (SVI and Population: prioritizes SVI > 0.75 or high population_served even up to +30% cost)
     """
     if not failing_nodes_batch:
@@ -611,6 +675,12 @@ async def evaluate_batch_failures(
     budget_val = max(0.0, float(remaining_budget))
     crews_val = max(0, int(remaining_crews))
     clock_T = round(max(0.0, float(current_time_T)), 2)
+    next_crew_T = (
+        round(max(clock_T, float(next_crew_available_at)), 2)
+        if next_crew_available_at is not None
+        else None
+    )
+    is_lookahead = crews_val == 0 and next_crew_T is not None
 
     normalized_batch: list[dict[str, Any]] = []
     for item in failing_nodes_batch:
@@ -633,7 +703,8 @@ async def evaluate_batch_failures(
         item_T = round(float(item.get("current_time_T", clock_T)), 2)
         item_backup_h = round(float(item.get("battery_backup_hours", 2.5)), 2)
         item_deadline = round(float(item.get("battery_deadline", item_T + item_backup_h)), 2)
-        item_rem_window = round(max(0.0, item_deadline - item_T), 2)
+        item_start_T = round(max(item_T, next_crew_T), 2) if (is_lookahead and next_crew_T is not None) else item_T
+        item_rem_window = round(max(0.0, item_deadline - item_start_T), 2)
 
         norm_candidates: list[dict[str, Any]] = []
         for cand in item.get("candidate_nodes") or []:
@@ -671,7 +742,8 @@ async def evaluate_batch_failures(
             c_copy["recovery_time_ms"] = time_val
             c_copy["field_restoration_hours"] = restoration_hours
             c_copy["recovery_time_display"] = disp_val
-            c_copy["can_beat_battery_deadline"] = bool(restoration_hours < item_rem_window)
+            c_copy["projected_completion_T"] = round(item_start_T + restoration_hours, 2)
+            c_copy["can_beat_battery_deadline"] = bool((item_start_T + restoration_hours) < item_deadline)
             norm_candidates.append(c_copy)
 
         normalized_batch.append(
@@ -687,6 +759,7 @@ async def evaluate_batch_failures(
                 "missing_dependency_type": missing_dep,
                 "magnitude": magnitude,
                 "current_time_T": item_T,
+                "next_crew_available_at": next_crew_T,
                 "battery_backup_hours": item_backup_h,
                 "battery_deadline": item_deadline,
                 "remaining_time_hours": item_rem_window,
@@ -700,10 +773,11 @@ async def evaluate_batch_failures(
         crews_val,
         current_time_T=clock_T,
         default_battery_deadline=battery_deadline,
+        next_crew_available_at=next_crew_T,
     )
     fallback_by_node: dict[str, dict[str, Any]] = {d["node_id"]: d for d in fallback_decisions}
 
-    if crews_val <= 0 or budget_val <= 0 or not any(d["status"] for d in fallback_decisions):
+    if (crews_val <= 0 and next_crew_T is None) or budget_val <= 0 or not any(d["status"] for d in fallback_decisions):
         return fallback_decisions
 
     first_node = normalized_batch[0]
@@ -711,8 +785,9 @@ async def evaluate_batch_failures(
     first_deadline = first_node["battery_deadline"]
     candidate_nodes_list = json.dumps(first_node["candidate_nodes"])
     failing_nodes_batch_json = json.dumps(normalized_batch)
+    next_crew_str = f"{next_crew_T}" if next_crew_T is not None else "N/A"
 
-    # Task 3: The Ethical System Prompt (combining Climate Justice, DES Time Window, and Knapsack)
+    # Task 2 & Task 3: Ethical + Time-Aware + Look-Ahead Crew Scheduling System Prompt
     system_prompt = (
         "You are an autonomous emergency operations AI. You must evaluate the failing nodes batch.\n\n"
         "You must balance three constraints: 1. Budget/Crews (Knapsack), 2. Time (Battery vs. Repair Time), "
@@ -720,16 +795,18 @@ async def evaluate_batch_failures(
         "Ethical Directive: You MUST prioritize nodes with an SVI > 0.75 or high population_served, "
         "even if their estimated_cost is up to 30% higher than a lower SVI node. "
         "You must justify this trade-off explicitly.\n\n"
+        f"If remaining_crews is 0, you cannot dispatch an immediate repair. However, a crew will be freed at "
+        f"T+{next_crew_str}h. You may schedule a recovery route IF AND ONLY IF "
+        f"({next_crew_str} + Field Restoration Time) is STRICTLY LESS than the node's {first_deadline}. "
+        f"In your reasoning, state that the repair is queued pending crew arrival.\n\n"
         "Return the standard JSON decision array, but in your reasoning field, explicitly state the ethical "
         "calculation (e.g., 'Absorbed $45K higher cost to prioritize clinic in SVI 0.88 zone serving 5,000 residents').\n\n"
         f'Global Dispatch Context: The global clock is T+{clock_T}h. Node "{node_name}" has entered CRITICAL_BATTERY '
         f"state and will die at T+{first_deadline}h. Evaluate {candidate_nodes_list}. "
-        f"You have {budget_val} USD and {crews_val} repair crews available across the failing batch: {failing_nodes_batch_json}. "
-        f"You MUST select recovery routes where Field Restoration Time (`field_restoration_hours`) is strictly less than "
-        f"the remaining time (`battery_deadline - current_time_T`), total `estimated_cost` <= {budget_val}, and "
-        f"total `crews_used` <= {crews_val}.\n\n"
+        f"You have {budget_val} USD, {crews_val} immediate repair crews available, and next_crew_available_at=T+{next_crew_str}h "
+        f"across the failing batch: {failing_nodes_batch_json}.\n\n"
         f'Return strictly a JSON array of decision objects: [ {{"node_id": "...", "status": boolean, '
-        f'"reasoning": "Explicitly state the ethical SVI/population calculation, cost trade-off, and battery window", '
+        f'"reasoning": "Explicitly state the ethical SVI/population calculation, cost trade-off, and whether queued pending crew arrival", '
         f'"recovery_command": "...", "new_edge": {{"source": "...", "target": "...", "cost": int, "crews_used": int}} }} ]. '
         f"If status is false, new_edge is null."
     )
@@ -748,10 +825,10 @@ async def evaluate_batch_failures(
                 "content": (
                     f"Global Clock: T+{clock_T}h. "
                     f"Available Emergency Budget: ${budget_val:,.2f} USD. "
-                    f"Available Active Repair Crews: {crews_val}. "
-                    f"CRITICAL_BATTERY nodes batch (with svi_score and population_served): {failing_nodes_batch_json}. "
-                    f"Enforce the Ethical Directive (prioritize SVI > 0.75 or high population_served even up to +30% cost), "
-                    f"select only routes where field_restoration_hours < (battery_deadline - current_time_T), "
+                    f"Available Immediate Repair Crews: {crews_val}. "
+                    f"next_crew_available_at: T+{next_crew_str}h. "
+                    f"CRITICAL_BATTERY nodes batch: {failing_nodes_batch_json}. "
+                    f"Enforce the Ethical Directive and Look-Ahead Crew Scheduling rule, "
                     f"and return ONLY the JSON array of decision objects."
                 ),
             },
@@ -799,16 +876,19 @@ async def evaluate_batch_failures(
             validated_decisions: list[dict[str, Any]] = []
             spent_budget = 0.0
             spent_crews = 0
+            effective_crews_cap = 2 if is_lookahead else crews_val
 
             for node_info in normalized_batch:
                 nid = node_info["node_id"]
                 node_T = float(node_info["current_time_T"])
                 node_deadline = float(node_info["battery_deadline"])
-                rem_window_h = float(node_info["remaining_time_hours"])
+                start_T = round(max(node_T, next_crew_T), 2) if (is_lookahead and next_crew_T is not None) else node_T
                 svi_val = float(node_info["svi_score"])
                 pop_val = int(node_info["population_served"])
                 candidates = node_info["candidate_nodes"]
-                time_viable_cands = [c for c in candidates if float(c["field_restoration_hours"]) < rem_window_h]
+                time_viable_cands = [
+                    c for c in candidates if (start_T + float(c["field_restoration_hours"])) < node_deadline
+                ]
                 cand_by_id = {str(c.get("id") or c.get("name")): c for c in time_viable_cands}
 
                 llm_dec = llm_by_node.get(nid)
@@ -822,6 +902,8 @@ async def evaluate_batch_failures(
                     reasoning = fallback_by_node[nid]["reasoning"]
                 elif "svi" not in reasoning.lower():
                     reasoning = f"{reasoning} [SVI: {svi_val:.2f} | Population Served: {pop_val:,}]"
+                if is_lookahead and "queued" not in reasoning.lower() and next_crew_T is not None:
+                    reasoning = f"Queued pending crew arrival at T+{next_crew_T:.2f}h: {reasoning}"
 
                 if want_save and time_viable_cands:
                     chosen_cand: dict[str, Any] | None = None
@@ -842,21 +924,22 @@ async def evaluate_batch_failures(
                     edge_hours = round(float(chosen_cand["field_restoration_hours"]), 2)
                     edge_disp = str(chosen_cand["recovery_time_display"])
                     chosen_src = str(chosen_cand.get("id") or chosen_cand.get("name"))
+                    completion_T = round(start_T + edge_hours, 2)
 
                     if (
-                        edge_hours < rem_window_h
+                        completion_T < node_deadline
                         and spent_budget + edge_cost <= budget_val
-                        and spent_crews + edge_crews <= crews_val
+                        and spent_crews + edge_crews <= effective_crews_cap
                     ):
                         spent_budget += edge_cost
                         spent_crews += edge_crews
-                        completion_T = round(node_T + edge_hours, 2)
                         raw_cmd = llm_dec.get("recovery_command")
                         rec_cmd = (
                             str(raw_cmd).strip()
                             if raw_cmd
                             else (
-                                f"DISPATCH {edge_crews} CREW(S) AT T+{node_T:.2f}h: REROUTE {chosen_src} -> {nid} "
+                                f"{'QUEUE' if is_lookahead else 'DISPATCH'} {edge_crews} CREW(S) AT T+{start_T:.2f}h: "
+                                f"REROUTE {chosen_src} -> {nid} "
                                 f"[SVI={svi_val:.2f} | POP={pop_val:,} | ETA T+{completion_T:.2f}h < T+{node_deadline:.2f}h | COST=${edge_cost:,}]"
                             )
                         )
@@ -864,6 +947,9 @@ async def evaluate_batch_failures(
                             {
                                 "node_id": nid,
                                 "status": True,
+                                "is_queued_crew": bool(is_lookahead),
+                                "dispatch_start_T": start_T,
+                                "completion_T": completion_T,
                                 "reasoning": reasoning,
                                 "recovery_command": rec_cmd,
                                 "new_edge": {
@@ -888,6 +974,9 @@ async def evaluate_batch_failures(
                     {
                         "node_id": nid,
                         "status": False,
+                        "is_queued_crew": False,
+                        "dispatch_start_T": start_T,
+                        "completion_T": None,
                         "reasoning": reasoning,
                         "recovery_command": None,
                         "new_edge": None,
@@ -922,11 +1011,12 @@ async def evaluate_node_failure(
     battery_deadline: float = 4.0,
     svi_score: float = 0.5,
     population_served: int = 12000,
+    next_crew_available_at: float | None = None,
 ) -> dict[str, Any]:
     """
     Time-aware and Climate-Justice-aware single-node wrapper that delegates to
     `evaluate_batch_failures` with `current_time_T`, `battery_deadline`, `svi_score`,
-    and `population_served`.
+    `population_served`, and `next_crew_available_at`.
     """
     batch_item = {
         "node_id": node_name,
@@ -940,6 +1030,7 @@ async def evaluate_node_failure(
         "route_distance": route_distance,
         "route_path_nodes": route_path_nodes,
         "current_time_T": current_time_T,
+        "next_crew_available_at": next_crew_available_at,
         "battery_backup_hours": max(0.5, round(battery_deadline - current_time_T, 2)),
         "battery_deadline": battery_deadline,
         "svi_score": svi_score,
@@ -953,6 +1044,7 @@ async def evaluate_node_failure(
         remaining_crews=remaining_crews,
         current_time_T=current_time_T,
         battery_deadline=battery_deadline,
+        next_crew_available_at=next_crew_available_at,
     )
     if not decisions:
         return {
