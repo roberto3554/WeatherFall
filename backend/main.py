@@ -9,9 +9,9 @@ from typing import Any
 
 import httpx
 import networkx as nx
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -31,10 +31,16 @@ try:
         format_recovery_duration,
     )
     from .auth import (
+        ACCESS_TOKEN_EXPIRE_MINUTES,
+        SESSION_COOKIE_NAME,
         create_access_token,
+        decode_and_verify_token,
+        extract_request_token,
         get_current_user,
         hash_password,
+        oauth2_scheme,
         require_admin,
+        revoke_token,
         verify_password,
     )
     from .database import AsyncSessionLocal, get_db, init_db
@@ -73,10 +79,16 @@ except ImportError:
         format_recovery_duration,
     )
     from auth import (
+        ACCESS_TOKEN_EXPIRE_MINUTES,
+        SESSION_COOKIE_NAME,
         create_access_token,
+        decode_and_verify_token,
+        extract_request_token,
         get_current_user,
         hash_password,
+        oauth2_scheme,
         require_admin,
+        revoke_token,
         verify_password,
     )
     from database import AsyncSessionLocal, get_db, init_db
@@ -525,9 +537,44 @@ async def serve_login() -> FileResponse:
     return FileResponse(os.path.join(FRONTEND_DIR, "login.html"))
 
 
-@app.get("/admin")
-async def serve_admin() -> FileResponse:
-    return FileResponse(os.path.join(FRONTEND_DIR, "admin.html"))
+@app.get("/admin", response_model=None)
+async def serve_admin(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """
+    Serves the GIS Infrastructure Admin Console only to authenticated administrators
+    with a verified server-side session cookie (or Authorization Bearer token).
+    Unauthenticated or expired sessions are redirected to /login?next=/admin.
+    """
+    auth_header = request.headers.get("Authorization", "")
+    bearer_token = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else None
+    raw_token = extract_request_token(request, bearer_token)
+
+    if not raw_token:
+        return RedirectResponse(url="/login?next=/admin", status_code=status.HTTP_302_FOUND)
+
+    try:
+        payload = decode_and_verify_token(raw_token)
+        username = payload.get("sub")
+        if not username or not isinstance(username, str):
+            raise ValueError("Missing subject claim")
+        result = await db.execute(select(User).where(User.username == username))
+        user = result.scalar_one_or_none()
+        if user is None or not user.is_active or not user.is_admin:
+            raise ValueError("Inactive or non-admin user")
+    except Exception:
+        redirect = RedirectResponse(url="/login?next=/admin", status_code=status.HTTP_302_FOUND)
+        redirect.delete_cookie(SESSION_COOKIE_NAME, path="/")
+        return redirect
+
+    return FileResponse(
+        os.path.join(FRONTEND_DIR, "admin.html"),
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
 
 
 # ─── Auth ────────────────────────────────────────────────────────────────
@@ -536,10 +583,11 @@ async def serve_admin() -> FileResponse:
 @limiter.limit("5/minute")
 async def login(
     request: Request,
+    response: Response,
     payload: UserLogin,
     db: AsyncSession = Depends(get_db),
 ) -> Token:
-    """Authenticate an operator and issue a JWT access token."""
+    """Authenticate an operator, issue a signed JWT access token, and set an HttpOnly session cookie."""
     result = await db.execute(select(User).where(User.username == payload.username))
     user = result.scalar_one_or_none()
     if user is None or not user.is_active or not verify_password(payload.password, user.hashed_password):
@@ -549,12 +597,33 @@ async def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
     token = create_access_token(subject=user.username, is_admin=user.is_admin)
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        samesite="lax",
+        max_age=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        path="/",
+    )
     return Token(
         access_token=token,
         token_type="bearer",
         username=user.username,
         is_admin=user.is_admin,
     )
+
+
+@app.post("/api/v1/auth/logout")
+async def logout(
+    request: Request,
+    response: Response,
+    token: str | None = Depends(oauth2_scheme),
+) -> dict[str, str]:
+    """Revoke the active JWT session token server-side and clear the HttpOnly session cookie."""
+    resolved_token = extract_request_token(request, token)
+    revoke_token(resolved_token)
+    response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+    return {"status": "signed_out"}
 
 
 @app.post("/api/v1/auth/register", response_model=UserResponse, status_code=201)
@@ -743,8 +812,11 @@ async def _auto_connect_node(db: AsyncSession, new_node: Node) -> None:
 
 
 @app.get("/api/v1/nodes", response_model=list[NodeResponse])
-async def list_nodes(db: AsyncSession = Depends(get_db)) -> list[Node]:
-    """List all registered infrastructure nodes."""
+async def list_nodes(
+    _admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> list[Node]:
+    """Admin-only: list all registered infrastructure nodes."""
     result = await db.execute(select(Node).order_by(Node.id))
     return list(result.scalars().all())
 
@@ -858,8 +930,11 @@ async def _resolve_node_by_id_or_name(
 
 
 @app.get("/api/v1/edges", response_model=list[EdgeResponse])
-async def list_edges(db: AsyncSession = Depends(get_db)) -> list[EdgeResponse]:
-    """List all registered directed dependency edges with source/target node names."""
+async def list_edges(
+    _admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> list[EdgeResponse]:
+    """Admin-only: list all registered directed dependency edges with source/target node names."""
     nodes_result = await db.execute(select(Node))
     id_to_name = {n.id: n.name for n in nodes_result.scalars().all()}
 
@@ -1089,10 +1164,11 @@ async def search_osm_infrastructure(
     west: float = Query(-80.32, description="Western longitude of bounding box"),
     north: float = Query(25.86, description="Northern latitude of bounding box"),
     east: float = Query(-80.12, description="Eastern longitude of bounding box"),
+    _admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """
-    Fast proxy endpoint to query the OpenStreetMap Overpass API for real-world
+    Admin-only proxy endpoint to query the OpenStreetMap Overpass API for real-world
     infrastructure facilities within the current Leaflet map bounding box, with
     instant fallback/enrichment from the Miami OSM catalog if Overpass is rate-limited.
     """
