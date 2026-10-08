@@ -10,14 +10,14 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-    <link rel="stylesheet" href="/static/style.css?v=10">
+    <link rel="stylesheet" href="/static/style.css?v=12">
 </head>
 <body>
     <div class="layout-container">
         <!-- Floating Glassmorphic Command Center Sidebar -->
         <aside id="control-sidebar" class="sidebar">
             <div class="sidebar-header">
-                <div class="brand-group">
+                <a href="/" class="brand-group brand-link" title="Go to WeatherFall Main Page">
                     <div class="brand-badge">
                         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/>
@@ -28,7 +28,7 @@
                         <h1 class="logo">WeatherFall</h1>
                         <p class="subtitle">Miami Infrastructure Command Center</p>
                     </div>
-                </div>
+                </a>
                 <div class="sidebar-header-actions">
                     <button type="button" id="theme-toggle-btn" class="theme-toggle-btn" title="Switch between Dark and Light mode" aria-label="Switch theme">
                         <svg id="theme-icon-sun" class="theme-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -51,6 +51,15 @@
                         Hide
                     </button>
                 </div>
+            </div>
+
+            <!-- Global Simulation Clock (DES Synchronous Header Bar) -->
+            <div class="global-sim-clock-bar" id="global-sim-clock-bar" role="timer" aria-live="polite" aria-label="Global Simulation Clock">
+                <div class="sim-clock-label-group">
+                    <span class="sim-clock-indicator" id="sim-clock-indicator"></span>
+                    <span class="sim-clock-label">Global Simulation Clock</span>
+                </div>
+                <span class="sim-clock-value" id="global-sim-clock">T+00:00</span>
             </div>
 
             <!-- Operator Session Bar -->
@@ -149,6 +158,39 @@
                     </div>
                 </div>
 
+                <div class="control-group">
+                    <div class="label-row">
+                        <label for="emergency-budget">Knapsack Resource Limits</label>
+                        <span class="badge">Finite Ops</span>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1.35fr 1fr; gap: 8px;">
+                        <div>
+                            <small class="hint-text" style="display:block; margin-bottom:3px;">Budget (USD)</small>
+                            <input
+                                type="number"
+                                id="emergency-budget"
+                                value="5000000"
+                                min="0"
+                                step="25000"
+                                aria-label="Emergency Budget (USD)"
+                            >
+                        </div>
+                        <div>
+                            <small class="hint-text" style="display:block; margin-bottom:3px;">Repair Crews</small>
+                            <input
+                                type="number"
+                                id="active-repair-crews"
+                                value="3"
+                                min="0"
+                                max="50"
+                                step="1"
+                                aria-label="Active Repair Crews"
+                            >
+                        </div>
+                    </div>
+                    <small class="hint-text">AI solves a Time-Aware DES &amp; Knapsack optimization before backup batteries expire.</small>
+                </div>
+
                 <div class="button-row">
                     <button id="run-btn" class="run-button">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -173,29 +215,7 @@
 
                 <div id="loading-spinner" class="loading-banner hidden">
                     <span class="spinner-ring"></span>
-                    <span>Analyzing street-grid cascade &amp; AI recovery...</span>
-                </div>
-
-                <div class="telemetry-panel">
-                    <div class="telemetry-title">Live Cascade Telemetry</div>
-                    <div class="telemetry-grid">
-                        <div class="telemetry-item">
-                            <span class="t-label">System Status</span>
-                            <span id="stat-state" class="t-value state-idle">READY</span>
-                        </div>
-                        <div class="telemetry-item">
-                            <span class="t-label">Evaluated</span>
-                            <span id="stat-evaluated" class="t-value">0 / 0</span>
-                        </div>
-                        <div class="telemetry-item">
-                            <span class="t-label">Impacted</span>
-                            <span id="stat-failed" class="t-value val-fail">0</span>
-                        </div>
-                        <div class="telemetry-item">
-                            <span class="t-label">Operational</span>
-                            <span id="stat-survived" class="t-value val-survive">0</span>
-                        </div>
-                    </div>
+                    <span>Running Discrete Event Simulation &amp; AI recovery...</span>
                 </div>
             </div>
         </aside>
@@ -209,9 +229,10 @@
                     <span class="legend-item"><i class="dot dot-health"></i> Health</span>
                     <span class="legend-item"><i class="dot dot-comms"></i> Comms</span>
                     <span class="legend-divider"></span>
-                    <span class="legend-item"><i class="dot dot-fail"></i> Failed</span>
+                    <span class="legend-item"><i class="dot dot-critical-battery"></i> Critical Battery</span>
+                    <span class="legend-item"><i class="dot dot-fail"></i> Offline</span>
                     <span class="legend-item"><i class="dot dot-survive"></i> Intact</span>
-                    <span class="legend-item"><i class="dot dot-saved node-saved"></i> AI Rerouted</span>
+                    <span class="legend-item"><i class="dot dot-saved"></i> AI Rerouted</span>
                 </div>
                 <div id="network-canvas"></div>
             </div>
@@ -226,6 +247,36 @@
                         <span class="feed-pulse-dot"></span>
                         <span class="console-title">Live Incident Timeline</span>
                         <span id="feed-count-badge" class="feed-badge">Standby</span>
+                    </div>
+                    <div class="timeline-telemetry" aria-label="Live Cascade Telemetry">
+                        <div class="tt-pill">
+                            <span class="tt-label">Sim Clock</span>
+                            <span id="stat-clock" class="t-value val-clock">T+00:00</span>
+                        </div>
+                        <div class="tt-pill">
+                            <span class="tt-label">Status</span>
+                            <span id="stat-state" class="t-value state-idle">READY</span>
+                        </div>
+                        <div class="tt-pill">
+                            <span class="tt-label">Events</span>
+                            <span id="stat-evaluated" class="t-value">0 / 0</span>
+                        </div>
+                        <div class="tt-pill">
+                            <span class="tt-label">Impacted</span>
+                            <span id="stat-failed" class="t-value val-fail">0</span>
+                        </div>
+                        <div class="tt-pill">
+                            <span class="tt-label">Restored</span>
+                            <span id="stat-survived" class="t-value val-survive">0</span>
+                        </div>
+                        <div class="tt-pill">
+                            <span class="tt-label">Budget</span>
+                            <span id="stat-budget" class="t-value">$5,000,000</span>
+                        </div>
+                        <div class="tt-pill">
+                            <span class="tt-label">Crews</span>
+                            <span id="stat-crews" class="t-value">3</span>
+                        </div>
                     </div>
                     <button type="button" id="console-toggle-btn" class="console-toggle-btn">
                         Collapse
@@ -257,8 +308,8 @@
     <div id="pdf-template" style="display: none;">
         <div class="pdf-report-header">
             <div class="pdf-title-block">
-                <h1>WEATHERFALL - AUTOMATED INCIDENT REPORT</h1>
-                <p class="pdf-subtitle">Miami Critical Infrastructure Cascade &amp; Self-Healing Network Analysis</p>
+                <h1>WEATHERFALL — AUTOMATED INCIDENT &amp; RECOVERY REPORT</h1>
+                <p class="pdf-subtitle">Miami Critical Infrastructure Cascade, New Restored Connections &amp; Complete Failure Trace</p>
             </div>
             <div class="pdf-meta-stamp">
                 <div><strong>DATE / TIME:</strong> <span id="pdf-timestamp">--</span></div>
@@ -266,13 +317,13 @@
             </div>
         </div>
 
-        <div class="pdf-summary-grid">
+        <div class="pdf-summary-grid pdf-summary-grid-6">
             <div class="pdf-meta-box">
-                <span class="pdf-meta-label">DISASTER TYPE</span>
+                <span class="pdf-meta-label">DISASTER SCENARIO</span>
                 <span id="pdf-disaster-type" class="pdf-meta-value">--</span>
             </div>
             <div class="pdf-meta-box">
-                <span class="pdf-meta-label">MAGNITUDE</span>
+                <span class="pdf-meta-label">MAGNITUDE / SEVERITY</span>
                 <span id="pdf-disaster-magnitude" class="pdf-meta-value">--</span>
             </div>
             <div class="pdf-meta-box">
@@ -283,21 +334,65 @@
                 <span class="pdf-meta-label">CASCADE OUTCOME</span>
                 <span id="pdf-cascade-outcome" class="pdf-meta-value">--</span>
             </div>
-        </div>
-
-        <div class="pdf-section">
-            <h2 class="pdf-section-title">1. SPATIAL TOPOLOGY &amp; SELF-HEALING SNAPSHOT</h2>
-            <div class="pdf-snapshot-frame">
-                <img id="pdf-map-snapshot" alt="Miami Infrastructure Cascade Snapshot">
+            <div class="pdf-meta-box">
+                <span class="pdf-meta-label">NEW RESTORED CONNECTIONS</span>
+                <span id="pdf-restored-count" class="pdf-meta-value">--</span>
+            </div>
+            <div class="pdf-meta-box">
+                <span class="pdf-meta-label">TOTAL RECOVERY COST &amp; TIME</span>
+                <span id="pdf-total-recovery-metrics" class="pdf-meta-value">--</span>
             </div>
         </div>
 
         <div class="pdf-section">
-            <h2 class="pdf-section-title">2. AI EXECUTION TRACE &amp; RECOVERY LOG</h2>
+            <h2 class="pdf-section-title">1. CITY TOPOLOGY MAP — NEW RESTORED CONNECTIONS &amp; CASCADE IMPACT</h2>
+            <div class="pdf-snapshot-frame">
+                <img id="pdf-map-snapshot" alt="Miami Infrastructure Restored Connections Snapshot">
+            </div>
+            <div id="pdf-restored-edges-wrap" class="pdf-table-wrap">
+                <h3 class="pdf-subsection-title">1.1 New AI-Restored City Connections</h3>
+                <table class="pdf-data-table">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Emergency Supplier Node</th>
+                            <th>Restored Target Facility</th>
+                            <th>Target Sector</th>
+                            <th>Est. Cost (USD)</th>
+                            <th>Est. Recovery Time</th>
+                        </tr>
+                    </thead>
+                    <tbody id="pdf-restored-edges-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="pdf-section">
+            <h2 class="pdf-section-title">2. COMPLETE TRACE OF FAILED &amp; IMPACTED NODES</h2>
+            <div class="pdf-table-wrap">
+                <table class="pdf-data-table pdf-failed-trace-table">
+                    <thead>
+                        <tr>
+                            <th>Step</th>
+                            <th>Failed Facility</th>
+                            <th>Sector</th>
+                            <th>Severed Upstream Parent</th>
+                            <th>Resolution Status</th>
+                            <th>Emergency Reroute &amp; Metrics</th>
+                            <th>AI Structural &amp; Recovery Reasoning</th>
+                        </tr>
+                    </thead>
+                    <tbody id="pdf-failed-nodes-body"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="pdf-section">
+            <h2 class="pdf-section-title">3. CHRONOLOGICAL INCIDENT TIMELINE LOG</h2>
             <pre id="pdf-trace-log"></pre>
         </div>
     </div>
 
-    <script src="/static/app.js?v=12"></script>
+    <script src="/static/app.js?v=16"></script>
 </body>
 </html>

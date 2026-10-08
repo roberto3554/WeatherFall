@@ -192,10 +192,51 @@ function toggleTheme() {
     applyTheme(isLightMode() ? 'dark' : 'light');
 }
 
+function getSviBadgeMeta(sviScore) {
+    if (sviScore === null || sviScore === undefined || !Number.isFinite(Number(sviScore))) {
+        return null;
+    }
+    const val = Math.max(0.0, Math.min(1.0, Number(sviScore)));
+    const sviFormatted = val.toFixed(2);
+    if (val < 0.3) {
+        return {
+            value: val,
+            sviFormatted,
+            riskLabel: 'Low Risk',
+            pillClass: 'svi-badge-low',
+            badgeText: `SVI: ${sviFormatted} - Low Risk`
+        };
+    }
+    if (val <= 0.7) {
+        return {
+            value: val,
+            sviFormatted,
+            riskLabel: 'Moderate Risk',
+            pillClass: 'svi-badge-moderate',
+            badgeText: `SVI: ${sviFormatted} - Moderate Risk`
+        };
+    }
+    return {
+        value: val,
+        sviFormatted,
+        riskLabel: 'High Risk',
+        pillClass: 'svi-badge-high',
+        badgeText: `SVI: ${sviFormatted} - High Risk`
+    };
+}
+
 function buildPopoverHtml(node, statusText = 'Operational') {
     const sector = String(node.type || 'energy').toUpperCase();
     const accent = getSectorAccentColor(node.type);
     const coords = `${Number(node.lat || 0).toFixed(4)}° N, ${Math.abs(Number(node.lon || 0)).toFixed(4)}° W`;
+    const sviMeta = getSviBadgeMeta(node.sviScore);
+    const popVal = Number(node.populationServed || 0);
+    const demoHtml = sviMeta
+        ? `<div class="gis-popup-demographics">
+               <span class="feed-svi-pill ${sviMeta.pillClass}">${escapeHtml(sviMeta.badgeText)}</span>
+               ${popVal > 0 ? `<span class="feed-pop-pill">Pop: ${popVal.toLocaleString()}</span>` : ''}
+           </div>`
+        : '';
     return `
         <div class="gis-popup">
             <div class="gis-popup-header">
@@ -204,6 +245,7 @@ function buildPopoverHtml(node, statusText = 'Operational') {
             </div>
             <div class="gis-popup-title">${escapeHtml(node.name)}</div>
             <div class="gis-popup-coords">${escapeHtml(coords)}</div>
+            ${demoHtml}
         </div>
     `;
 }
@@ -310,45 +352,35 @@ function buildNodeLeafletDivIcon(node, state = {}) {
     const statusColor = state.statusColor || '#94a3b8';
     const isImpact = impactNodeId === node.id;
     const isSaved = savedNodeIds.has(node.id);
-    const isFailed = Boolean(state.isFailed || (isImpact && !isSaved));
-    const glitchBurst = Boolean(state.glitchBurst);
+    const isCriticalBattery = Boolean(state.isCriticalBattery);
+    const isFailed = Boolean(!isCriticalBattery && (state.isFailed || (isImpact && !isSaved)));
+    const isEvaluating = Boolean(!isCriticalBattery && statusBadge && statusBadge.includes('Evaluating'));
     const svgHtml = createModernNodeSvg(node.type, strokeOverride);
     const shortName = escapeHtml(truncateLabel(node.name, 16));
 
-    const markerStateClasses = [
-        'wf-node-marker',
-        isFailed ? 'wf-node-glitch-container' : '',
-        glitchBurst ? 'wf-node-glitch-burst' : ''
-    ].filter(Boolean).join(' ');
-
-    const badgeStateClasses = [
-        'wf-node-badge-wrap',
-        isFailed ? 'wf-badge-crt-distort' : '',
-        glitchBurst ? 'wf-badge-crt-burst' : ''
-    ].filter(Boolean).join(' ');
-
-    const ringOrGlitchHtml = isSaved
+    const ringHtml = isSaved
         ? `<span class="wf-saved-ring"></span>`
+        : isCriticalBattery
+        ? `<span class="wf-critical-battery-ring"></span>`
         : isFailed
-        ? `
-            <span class="wf-crt-scanlines" aria-hidden="true"></span>
-            <span class="wf-glitch-layer wf-glitch-cyan" aria-hidden="true">${svgHtml}</span>
-            <span class="wf-glitch-layer wf-glitch-red" aria-hidden="true">${svgHtml}</span>
-            <span class="wf-crt-tear-bar" aria-hidden="true"></span>
-        `
+        ? `<span class="wf-shockwave-ring"></span>`
+        : isEvaluating
+        ? `<span class="wf-evaluating-ring"></span>`
         : '';
 
     const statusHtml = statusBadge
         ? `<span class="wf-node-status" style="color:${statusColor};">${escapeHtml(statusBadge)}</span>`
         : '';
 
+    const markerStateClass = isCriticalBattery ? ' wf-node-critical-battery' : '';
+
     const html = `
-        <div class="${markerStateClasses}">
-            <div class="${badgeStateClasses}">
-                ${ringOrGlitchHtml}
+        <div class="wf-node-marker${markerStateClass}">
+            <div class="wf-node-badge-wrap">
+                ${ringHtml}
                 <div class="wf-badge-core">${svgHtml}</div>
             </div>
-            <div class="wf-node-label ${isFailed ? 'wf-label-glitch' : ''}">
+            <div class="wf-node-label">
                 ${shortName}
                 ${statusHtml}
             </div>
@@ -375,6 +407,7 @@ function setNodeVisualState(nodeId, partialState = {}) {
         statusColor: '#94a3b8',
         strokeOverride: null,
         isFailed: false,
+        isCriticalBattery: false,
         glitchBurst: false
     };
     const next = { ...prev, ...partialState };
@@ -399,7 +432,7 @@ function getEdgeFlowColor(edge, srcNode) {
     return getSectorAccentColor(srcNode ? srcNode.type : 'energy');
 }
 
-function createEdgeArrowMarker(srcNode, tgtNode, color, isSevered = false) {
+function createEdgeArrowMarker(srcNode, tgtNode, color) {
     const midLat = srcNode.lat + (tgtNode.lat - srcNode.lat) * 0.62;
     const midLon = srcNode.lon + (tgtNode.lon - srcNode.lon) * 0.62;
     const dLat = tgtNode.lat - srcNode.lat;
@@ -407,7 +440,7 @@ function createEdgeArrowMarker(srcNode, tgtNode, color, isSevered = false) {
     const angleDeg = (Math.atan2(dLon, dLat) * 180) / Math.PI;
 
     const arrowSvg = `
-        <div class="wf-edge-arrow-wrap ${isSevered ? 'wf-arrow-severed' : ''}" style="transform: translate(-50%, -50%) rotate(${angleDeg.toFixed(1)}deg); width:14px; height:14px; display:flex; align-items:center; justify-content:center;">
+        <div class="wf-edge-arrow-wrap" style="transform: translate(-50%, -50%) rotate(${angleDeg.toFixed(1)}deg); width:14px; height:14px; display:flex; align-items:center; justify-content:center;">
             <svg width="12" height="12" viewBox="0 0 12 12">
                 <path d="M6 1 L10.5 10 L6 7.8 L1.5 10 Z" fill="${color}"/>
             </svg>
@@ -443,48 +476,19 @@ function renderSingleEdgeOnMap(edge) {
         [tgtNode.lat, tgtNode.lon]
     ];
 
-    const isSevered = edge.color === '#ef4444' || edge.severed === true;
     const isHeal = Boolean(edge.isDynamic);
-    const isSurvived = edge.color === '#10b981';
+    const edgeColor = getEdgeFlowColor(edge, srcNode);
 
-    const conduitColor = isSevered
-        ? 'rgba(239, 68, 68, 0.38)'
-        : isHeal
-        ? 'rgba(56, 189, 248, 0.35)'
-        : isSurvived
-        ? 'rgba(16, 185, 129, 0.35)'
-        : getDefaultEdgeColor();
-
-    // Base physical conduit layer
     const polyline = L.polyline(latLngs, {
-        color: conduitColor,
-        weight: (edge.weight || 2.0) + 0.6,
-        opacity: isSevered ? 0.55 : 0.72,
-        dashArray: isSevered ? '4, 7' : null,
-        className: isSevered ? 'wf-edge-conduit wf-edge-conduit-severed' : 'wf-edge-conduit'
+        color: edgeColor,
+        weight: isHeal ? 3.2 : (edge.weight || 2.3),
+        opacity: edge.customColor ? 0.92 : 0.78,
+        dashArray: edge.dashArray || null,
+        className: 'wf-edge-conduit'
     }).addTo(edgesLayerGroup);
 
-    // Animated flowing data/resource transmission layer
-    const flowColor = getEdgeFlowColor(edge, srcNode);
-    const flowClass = isSevered
-        ? 'wf-edge-flow wf-edge-flow-severed'
-        : isHeal
-        ? 'wf-edge-flow wf-edge-flow-heal'
-        : isSurvived
-        ? 'wf-edge-flow wf-edge-flow-survive'
-        : 'wf-edge-flow wf-edge-flow-active';
-
-    const flowPolyline = L.polyline(latLngs, {
-        color: flowColor,
-        weight: isHeal ? 3.2 : isSurvived ? 2.8 : 2.3,
-        opacity: isSevered ? 0.78 : 0.96,
-        dashArray: isSevered ? '2, 12' : isHeal ? '10, 14' : '6, 16',
-        className: flowClass,
-        interactive: false
-    }).addTo(edgesLayerGroup);
-
-    const arrow = createEdgeArrowMarker(srcNode, tgtNode, flowColor, isSevered).addTo(edgesLayerGroup);
-    edgeLayersMap.set(edge.id, { polyline, flowPolyline, arrow });
+    const arrow = createEdgeArrowMarker(srcNode, tgtNode, edgeColor).addTo(edgesLayerGroup);
+    edgeLayersMap.set(edge.id, { polyline, arrow });
 }
 
 function refreshAllMapVisuals() {
@@ -506,6 +510,7 @@ function refreshAllMapVisuals() {
             statusColor: '#94a3b8',
             strokeOverride: null,
             isFailed: false,
+            isCriticalBattery: false,
             glitchBurst: false
         };
         setNodeVisualState(node.id, st);
@@ -526,12 +531,86 @@ function fitAllNodesBounds(animate = true) {
 }
 
 // =========================================================
+// GLOBAL SIMULATION CLOCK (DES SYNCHRONOUS CLOCK)
+// =========================================================
+
+let currentSimulationClockHours = 0.0;
+
+function formatSimulationClock(hoursFloat) {
+    const safeHours = Math.max(0, Number(hoursFloat) || 0);
+    const totalMinutes = Math.round(safeHours * 60);
+    const hh = Math.floor(totalMinutes / 60);
+    const mm = totalMinutes % 60;
+    return `T+${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+function ensureGlobalClockElement() {
+    let clockEl = document.getElementById('global-sim-clock');
+    if (!clockEl) {
+        const sidebar = document.getElementById('control-sidebar');
+        const sidebarHeader = sidebar ? sidebar.querySelector('.sidebar-header') : null;
+        if (sidebar && sidebarHeader) {
+            const bar = document.createElement('div');
+            bar.className = 'global-sim-clock-bar';
+            bar.id = 'global-sim-clock-bar';
+            bar.setAttribute('role', 'timer');
+            bar.setAttribute('aria-live', 'polite');
+            bar.innerHTML = `
+                <div class="sim-clock-label-group">
+                    <span class="sim-clock-indicator" id="sim-clock-indicator"></span>
+                    <span class="sim-clock-label">Global Simulation Clock</span>
+                </div>
+                <span class="sim-clock-value" id="global-sim-clock">T+00:00</span>
+            `;
+            sidebarHeader.insertAdjacentElement('afterend', bar);
+            clockEl = document.getElementById('global-sim-clock');
+        }
+    }
+    return clockEl;
+}
+
+function setGlobalSimulationClock(hoursFloat, isRunning = false) {
+    currentSimulationClockHours = Math.max(0, Number(hoursFloat) || 0);
+    const formatted = formatSimulationClock(currentSimulationClockHours);
+    const clockEl = ensureGlobalClockElement();
+    if (clockEl) {
+        clockEl.textContent = formatted;
+    }
+    const clockBar = document.getElementById('global-sim-clock-bar');
+    if (clockBar) {
+        clockBar.classList.toggle('clock-running', Boolean(isRunning));
+    }
+    const statClock = document.getElementById('stat-clock');
+    if (statClock) {
+        statClock.textContent = formatted;
+    }
+}
+
+async function tickGlobalSimulationClockTo(targetHours, isRunning = true) {
+    const target = Math.max(0, Number(targetHours) || 0);
+    const start = currentSimulationClockHours;
+    const delta = target - start;
+    if (delta <= 0.01) {
+        setGlobalSimulationClock(target, isRunning);
+        return;
+    }
+    const frames = Math.min(8, Math.max(3, Math.ceil(delta * 3)));
+    for (let f = 1; f <= frames; f++) {
+        const interp = start + (delta * f) / frames;
+        setGlobalSimulationClock(interp, isRunning);
+        await new Promise(resolve => setTimeout(resolve, 35));
+    }
+    setGlobalSimulationClock(target, isRunning);
+}
+
+// =========================================================
 // INCIDENT TIMELINE / LIVE FEED NOTIFICATION CARDS
 // =========================================================
 
 const FEED_SVGS = {
     system: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`,
     impact: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>`,
+    warning: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="16" height="10" rx="2" ry="2"/><line x1="22" y1="11" x2="22" y2="13"/><line x1="6" y1="11" x2="6" y2="13"/><line x1="10" y1="11" x2="10" y2="13"/></svg>`,
     fail: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`,
     survive: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>`,
     shield: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>`
@@ -552,15 +631,22 @@ function appendFeedCard({
     pillText = '',
     pillClass = '',
     description = '',
-    pdfSummary = ''
+    pdfSummary = '',
+    simTimeText = '',
+    sviScore = null,
+    populationServed = null
 }) {
     const consoleLog = document.getElementById('console-log');
     if (!consoleLog) return;
 
-    const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
+    const timestamp = simTimeText || new Date().toLocaleTimeString('en-US', { hour12: false });
+    const sviMeta = getSviBadgeMeta(sviScore);
+    const popVal = populationServed !== null && populationServed !== undefined ? Number(populationServed) : 0;
+
     const card = document.createElement('div');
     card.className = `feed-card feed-card-${variant} log-line`;
-    card.dataset.pdfSummary = pdfSummary || `[${timestamp}] ${title}${pillText ? ` [${pillText}]` : ''}: ${description}`;
+    const sviPdfTag = sviMeta ? ` [${sviMeta.badgeText}${popVal > 0 ? ` | Pop: ${popVal.toLocaleString()}` : ''}]` : '';
+    card.dataset.pdfSummary = pdfSummary || `[${timestamp}] ${title}${pillText ? ` [${pillText}]` : ''}${sviPdfTag}: ${description}`;
 
     const iconDiv = document.createElement('div');
     iconDiv.className = `feed-card-icon ${iconClass}`;
@@ -587,6 +673,24 @@ function appendFeedCard({
         titleGroup.appendChild(pillSpan);
     }
 
+    if (sviMeta) {
+        const sviSpan = document.createElement('span');
+        sviSpan.className = `feed-svi-pill ${sviMeta.pillClass}`;
+        sviSpan.textContent = sviMeta.badgeText;
+        sviSpan.title = popVal > 0
+            ? `Social Vulnerability Index: ${sviMeta.sviFormatted} (${sviMeta.riskLabel}) • Population Served: ${popVal.toLocaleString()} residents`
+            : `Social Vulnerability Index: ${sviMeta.sviFormatted} (${sviMeta.riskLabel})`;
+        titleGroup.appendChild(sviSpan);
+
+        if (popVal > 0) {
+            const popSpan = document.createElement('span');
+            popSpan.className = 'feed-pop-pill';
+            popSpan.textContent = `Pop: ${popVal.toLocaleString()}`;
+            popSpan.title = `Estimated residents served: ${popVal.toLocaleString()}`;
+            titleGroup.appendChild(popSpan);
+        }
+    }
+
     const timeSpan = document.createElement('span');
     timeSpan.className = 'feed-card-time';
     timeSpan.textContent = timestamp;
@@ -609,13 +713,14 @@ function appendFeedCard({
     updateFeedCounter();
 }
 
-function appendSystemCard(title, description) {
+function appendSystemCard(title, description, simTimeText = '') {
     appendFeedCard({
         variant: 'system',
         iconSvg: FEED_SVGS.system,
         iconClass: 'system-icon',
         title,
-        description
+        description,
+        simTimeText
     });
 }
 
@@ -663,17 +768,23 @@ function updateVolumetricLighting() {
     rootStyle.setProperty('--reactive-ambient-vignette', `rgba(245, 158, 11, ${(0.07 + warnScale * 0.06).toFixed(2)})`);
 }
 
-function updateTelemetry({ state, evaluated, total, failed, survived }) {
+function updateTelemetry({ state, evaluated, total, failed, survived, budget, crews, clockHours }) {
     const statState = document.getElementById('stat-state');
     const statEvaluated = document.getElementById('stat-evaluated');
     const statFailed = document.getElementById('stat-failed');
     const statSurvived = document.getElementById('stat-survived');
+    const statBudget = document.getElementById('stat-budget');
+    const statCrews = document.getElementById('stat-crews');
 
     if (state !== undefined) currentTelemetryState.state = state;
     if (evaluated !== undefined) currentTelemetryState.evaluated = evaluated;
     if (total !== undefined) currentTelemetryState.total = total;
     if (failed !== undefined) currentTelemetryState.failed = failed;
     if (survived !== undefined) currentTelemetryState.survived = survived;
+
+    if (clockHours !== undefined && clockHours !== null) {
+        setGlobalSimulationClock(clockHours, state === 'RUNNING');
+    }
 
     if (statState && state !== undefined) {
         statState.textContent = state;
@@ -691,18 +802,33 @@ function updateTelemetry({ state, evaluated, total, failed, survived }) {
     if (statSurvived && survived !== undefined) {
         statSurvived.textContent = String(survived);
     }
+    if (statBudget && budget !== undefined && budget !== null) {
+        statBudget.textContent = `$${Math.max(0, Math.round(Number(budget))).toLocaleString()}`;
+    }
+    if (statCrews && crews !== undefined && crews !== null) {
+        statCrews.textContent = String(Math.max(0, Math.round(Number(crews))));
+    }
 
     updateVolumetricLighting();
 }
 
+let lastSimulationTrace = [];
+
 function resetGraphState() {
     savedNodeIds.clear();
     impactNodeId = null;
+    lastSimulationTrace = [];
+    setGlobalSimulationClock(0.0, false);
 
     const exportPdfBtn = document.getElementById('export-pdf-btn');
     if (exportPdfBtn) {
         exportPdfBtn.disabled = true;
     }
+
+    const budgetInput = document.getElementById('emergency-budget');
+    const crewsInput = document.getElementById('active-repair-crews');
+    const initBudget = budgetInput ? Number(budgetInput.value || 5000000) : 5000000;
+    const initCrews = crewsInput ? Number(crewsInput.value || 3) : 3;
 
     topologyEdges = topologyEdges
         .filter(e => !e.isDynamic)
@@ -721,6 +847,7 @@ function resetGraphState() {
             statusColor: '#94a3b8',
             strokeOverride: null,
             isFailed: false,
+            isCriticalBattery: false,
             glitchBurst: false
         });
     });
@@ -732,7 +859,10 @@ function resetGraphState() {
         evaluated: 0,
         total: topologyNodes.length,
         failed: 0,
-        survived: 0
+        survived: 0,
+        budget: initBudget,
+        crews: initCrews,
+        clockHours: 0.0
     });
 }
 
@@ -764,6 +894,7 @@ async function fetchAndRenderTopology() {
         }
 
         initLeafletCommandMap();
+        ensureGlobalClockElement();
         if (leafletMap && baseTileLayer) {
             baseTileLayer.setUrl(getTileUrl(currentTheme));
         }
@@ -784,6 +915,8 @@ async function fetchAndRenderTopology() {
             const rawX = Number(node.x ?? -80.205);
             const rawY = Number(node.y ?? 25.778);
             const geo = normalizeGeoCoordinates(rawX, rawY, idx);
+            const sviScore = Number(node.svi_score ?? node.social_vulnerability_index ?? 0.5);
+            const populationServed = Number(node.population_served ?? 12000);
 
             return {
                 id: nodeId,
@@ -792,7 +925,9 @@ async function fetchAndRenderTopology() {
                 rawX,
                 rawY,
                 lat: geo.lat,
-                lon: geo.lon
+                lon: geo.lon,
+                sviScore,
+                populationServed
             };
         });
 
@@ -824,7 +959,9 @@ async function fetchAndRenderTopology() {
                 statusText: 'Operational',
                 statusBadge: '',
                 statusColor: '#94a3b8',
-                strokeOverride: null
+                strokeOverride: null,
+                isFailed: false,
+                isCriticalBattery: false
             };
             nodeStateMap.set(node.id, initialState);
 
@@ -853,12 +990,14 @@ async function fetchAndRenderTopology() {
             evaluated: 0,
             total: topologyNodes.length,
             failed: 0,
-            survived: 0
+            survived: 0,
+            clockHours: 0.0
         });
 
         appendSystemCard(
             'Miami Infrastructure Grid Loaded',
-            `Connected ${topologyNodes.length} critical facilities across ${rawEdges.length} street-routed dependency links.`
+            `Connected ${topologyNodes.length} critical facilities across ${rawEdges.length} street-routed dependency links.`,
+            'T+00:00'
         );
     } catch (error) {
         appendFeedCard({
@@ -873,15 +1012,74 @@ async function fetchAndRenderTopology() {
     }
 }
 
+function setSimulationLoadingBanner(visible, text = 'Simulation in Progress...') {
+    const loadingSpinner = document.getElementById('loading-spinner');
+    if (!loadingSpinner) return;
+
+    const textSpans = loadingSpinner.querySelectorAll('span:not(.spinner-ring)');
+    if (textSpans.length > 0) {
+        textSpans[0].textContent = text;
+    }
+
+    if (visible) {
+        loadingSpinner.classList.remove('hidden');
+    } else {
+        loadingSpinner.classList.add('hidden');
+    }
+}
+
+async function pollSimulationTask(taskId, pollIntervalMs = 2000, maxAttempts = 150) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+
+        const elapsedSec = Math.round((attempt * pollIntervalMs) / 1000);
+        setSimulationLoadingBanner(
+            true,
+            `Simulation in Progress (Task ${String(taskId).slice(0, 8)}… • ${elapsedSec}s elapsed)`
+        );
+
+        const pollResp = await fetch(`/api/v1/simulate/${encodeURIComponent(taskId)}`);
+        if (!pollResp.ok) {
+            const errData = await pollResp.json().catch(() => ({}));
+            throw new Error(
+                errData.detail || errData.error || `Simulation polling failed (HTTP ${pollResp.status})`
+            );
+        }
+
+        const statusData = await pollResp.json();
+        if (Array.isArray(statusData)) {
+            return statusData;
+        }
+
+        const status = String(statusData.status || '').toLowerCase();
+        const state = String(statusData.state || '').toUpperCase();
+
+        if (status === 'completed' || state === 'SUCCESS') {
+            const trace = statusData.result || statusData.execution_trace;
+            if (Array.isArray(trace)) {
+                return trace;
+            }
+            return [];
+        }
+
+        if (status === 'failed' || state === 'FAILURE') {
+            throw new Error(statusData.error || statusData.detail || 'Background simulation task failed.');
+        }
+    }
+
+    throw new Error('Simulation timed out waiting for background Celery worker.');
+}
+
 async function runSimulation() {
     if (isSimulating) return;
 
     const disasterSelect = document.getElementById('disaster-type');
     const magnitudeInput = document.getElementById('disaster-magnitude');
     const trajectoryInput = document.getElementById('disaster-trajectory');
+    const budgetInput = document.getElementById('emergency-budget');
+    const crewsInput = document.getElementById('active-repair-crews');
     const runBtn = document.getElementById('run-btn');
     const resetBtn = document.getElementById('reset-btn');
-    const loadingSpinner = document.getElementById('loading-spinner');
     const consoleLog = document.getElementById('console-log');
     const sidebar = document.getElementById('control-sidebar');
     const sidebarToggleBtn = document.getElementById('sidebar-toggle-btn');
@@ -891,6 +1089,8 @@ async function runSimulation() {
     const trajectory = (trajectoryInput && trajectoryInput.value.trim())
         ? trajectoryInput.value.trim()
         : 'Coming from the Atlantic East coast';
+    const emergencyBudget = budgetInput ? Math.max(0, Number(budgetInput.value || 5000000)) : 5000000;
+    const activeRepairCrews = crewsInput ? Math.max(0, parseInt(crewsInput.value || '3', 10)) : 3;
 
     if (window.innerWidth <= 768 && sidebar && !sidebar.classList.contains('collapsed')) {
         sidebar.classList.add('collapsed');
@@ -900,7 +1100,7 @@ async function runSimulation() {
     isSimulating = true;
     if (runBtn) runBtn.disabled = true;
     if (resetBtn) resetBtn.disabled = true;
-    if (loadingSpinner) loadingSpinner.classList.remove('hidden');
+    setSimulationLoadingBanner(true, 'Simulation in Progress — Dispatching task...');
 
     resetGraphState();
     if (consoleLog) {
@@ -914,12 +1114,16 @@ async function runSimulation() {
         evaluated: 0,
         total: topologyNodes.length,
         failed: 0,
-        survived: 0
+        survived: 0,
+        budget: emergencyBudget,
+        crews: activeRepairCrews,
+        clockHours: 0.0
     });
 
     appendSystemCard(
-        `Simulation Initiated — ${disasterType}`,
-        `Evaluating "${trajectory}" at intensity ${magnitude} across the Miami street network.`
+        `DES Simulation Initiated — ${disasterType}`,
+        `Evaluating "${trajectory}" at intensity ${magnitude} with Knapsack Budget $${emergencyBudget.toLocaleString()} and ${activeRepairCrews} Repair Crew(s). Global Clock initialized at T+00:00.`,
+        'T+00:00'
     );
 
     try {
@@ -930,7 +1134,9 @@ async function runSimulation() {
                 disaster_type: disasterType,
                 magnitude: magnitude,
                 disaster_direction: trajectory,
-                trajectory: trajectory
+                trajectory: trajectory,
+                emergency_budget: emergencyBudget,
+                active_repair_crews: activeRepairCrews
             })
         });
 
@@ -939,12 +1145,31 @@ async function runSimulation() {
             throw new Error(errData.detail || errData.error || `Simulation failed (HTTP ${response.status})`);
         }
 
-        const executionTrace = await response.json();
-        if (loadingSpinner) loadingSpinner.classList.add('hidden');
+        const dispatchPayload = await response.json();
+        let executionTrace = [];
 
+        if (Array.isArray(dispatchPayload)) {
+            executionTrace = dispatchPayload;
+        } else if (dispatchPayload && dispatchPayload.task_id) {
+            const taskId = String(dispatchPayload.task_id);
+            setSimulationLoadingBanner(
+                true,
+                `Simulation in Progress (Task ${taskId.slice(0, 8)}…)`
+            );
+            appendSystemCard(
+                'Simulation in Progress — Async Worker Queued',
+                `Task ID ${taskId} dispatched to Celery/Redis queue (status: ${dispatchPayload.status || 'processing'}). Polling /api/v1/simulate/${taskId.slice(0, 8)}… every 2s.`,
+                'T+00:00'
+            );
+            executionTrace = await pollSimulationTask(taskId, 2000);
+        } else if (dispatchPayload && Array.isArray(dispatchPayload.result)) {
+            executionTrace = dispatchPayload.result;
+        }
+
+        setSimulationLoadingBanner(false);
         await animateExecutionTrace(executionTrace);
     } catch (error) {
-        if (loadingSpinner) loadingSpinner.classList.add('hidden');
+        setSimulationLoadingBanner(false);
         updateTelemetry({ state: 'ERROR' });
         appendFeedCard({
             variant: 'fail',
@@ -980,25 +1205,30 @@ async function flashImpactNode(nodeId, nodeType, shortName, matchingNode) {
             statusColor: flashColors[f],
             strokeOverride: flashColors[f],
             isFailed: true,
+            isCriticalBattery: false,
             glitchBurst: true
         });
         await new Promise(resolve => setTimeout(resolve, 140));
     }
 
     setNodeVisualState(nodeId, {
-        statusText: 'Epicenter Impact (Failed)',
-        statusBadge: '• Epicenter',
+        statusText: 'Epicenter Impact (OFFLINE at T+00:00)',
+        statusBadge: '• OFFLINE (T+00:00)',
         statusColor: '#ef4444',
         strokeOverride: '#ef4444',
         isFailed: true,
+        isCriticalBattery: false,
         glitchBurst: true
     });
 }
 
 async function animateExecutionTrace(trace) {
-    let failedCount = 0;
-    let survivedCount = 0;
-    const evaluatedSet = new Set();
+    lastSimulationTrace = Array.isArray(trace) ? trace : [];
+    const impactedNodesSet = new Set();
+    const offlineNodesSet = new Set();
+    const criticalBatteryNodesSet = new Set();
+
+    setGlobalSimulationClock(0.0, true);
 
     for (let i = 0; i < trace.length; i++) {
         const step = trace[i];
@@ -1009,19 +1239,45 @@ async function animateExecutionTrace(trace) {
         const nodeType = matchingNode ? matchingNode.type : (step.node_type || 'energy');
         const shortName = truncateLabel(nodeName, 16);
 
-        if (step.step === 'impact') {
-            failedCount++;
-            evaluatedSet.add(nodeId);
+        const stepSvi = step.svi_score !== undefined && step.svi_score !== null
+            ? Number(step.svi_score)
+            : (step.social_vulnerability_index !== undefined && step.social_vulnerability_index !== null
+                ? Number(step.social_vulnerability_index)
+                : (matchingNode ? matchingNode.sviScore : null));
+        const stepPop = step.population_served !== undefined && step.population_served !== null
+            ? Number(step.population_served)
+            : (matchingNode ? matchingNode.populationServed : null);
+
+        if (matchingNode) {
+            if (stepSvi !== null && Number.isFinite(stepSvi)) matchingNode.sviScore = stepSvi;
+            if (stepPop !== null && Number.isFinite(stepPop)) matchingNode.populationServed = stepPop;
+        }
+
+        const eventTime = Number(step.event_time ?? 0.0);
+        const clockStr = formatSimulationClock(eventTime);
+        const evType = String(step.event_type || '').toUpperCase();
+        const nodeState = String(step.node_state || '').toUpperCase();
+
+        // Advance the Global Simulation Clock synchronously with this DES event
+        await tickGlobalSimulationClockTo(eventTime, true);
+
+        // 1. EPICENTER IMPACT (T+00:00 -> OFFLINE)
+        if (step.step === 'impact' || evType === 'EPICENTER_IMPACT') {
+            impactedNodesSet.add(nodeId);
+            offlineNodesSet.add(nodeId);
 
             appendFeedCard({
                 variant: 'impact',
                 iconSvg: FEED_SVGS.impact,
                 iconClass: 'impact-icon',
                 title: nodeName,
-                pillText: 'Epicenter Impact',
+                pillText: `EPICENTER • OFFLINE (${clockStr})`,
                 pillClass: 'pill-impact',
                 description: step.reasoning,
-                pdfSummary: `[STEP 1/${trace.length}] [EPICENTER IMPACT] ${nodeName}: ${step.reasoning}`
+                simTimeText: clockStr,
+                sviScore: stepSvi,
+                populationServed: stepPop,
+                pdfSummary: `[${clockStr}] [STEP ${stepNum}/${trace.length}] [EPICENTER IMPACT — OFFLINE] ${nodeName}: ${step.reasoning}`
             });
 
             await flashImpactNode(nodeId, nodeType, shortName, matchingNode);
@@ -1030,177 +1286,283 @@ async function animateExecutionTrace(trace) {
                 state: 'RUNNING',
                 evaluated: stepNum,
                 total: trace.length,
-                failed: failedCount,
-                survived: survivedCount
+                failed: impactedNodesSet.size,
+                survived: savedNodeIds.size,
+                budget: step.remaining_budget,
+                crews: step.remaining_crews
             });
 
-            await new Promise(resolve => setTimeout(resolve, 600));
+            await new Promise(resolve => setTimeout(resolve, 480));
             continue;
         }
 
-        if (matchingNode) {
-            setNodeVisualState(nodeId, {
-                statusText: 'Evaluating…',
-                statusBadge: '• Evaluating…',
-                statusColor: '#eab308',
-                strokeOverride: '#eab308',
-                isFailed: false,
-                glitchBurst: false
+        // 2. CRITICAL_BATTERY EVENT (Node lost upstream lifeline at T -> races against battery_deadline)
+        if (step.step === 'critical_battery' || evType === 'CRITICAL_BATTERY' || nodeState === 'CRITICAL_BATTERY') {
+            impactedNodesSet.add(nodeId);
+            criticalBatteryNodesSet.add(nodeId);
+
+            const deadlineHours = step.battery_deadline !== undefined && step.battery_deadline !== null
+                ? Number(step.battery_deadline)
+                : eventTime + Number(step.battery_backup_hours ?? 2.5);
+            const deadlineStr = formatSimulationClock(deadlineHours);
+            const backupHrs = Number(step.battery_backup_hours ?? Math.max(0.5, deadlineHours - eventTime)).toFixed(1);
+
+            // Highlight severed upstream edge in urgent amber while on backup battery
+            topologyEdges.forEach(edge => {
+                const matches = step.parent_node
+                    ? (edge.from === step.parent_node && edge.to === nodeId) ||
+                      (edge.from === nodeId && edge.to === step.parent_node)
+                    : edge.to === nodeId && offlineNodesSet.has(edge.from);
+                if (matches) {
+                    edge.color = '#f59e0b';
+                    edge.customColor = true;
+                    edge.weight = 3.0;
+                    renderSingleEdgeOnMap(edge);
+                }
             });
 
-            if (leafletMap) {
+            if (matchingNode) {
+                setNodeVisualState(nodeId, {
+                    statusText: `CRITICAL_BATTERY (${backupHrs}h backup • Dies ${deadlineStr})`,
+                    statusBadge: `• CRITICAL BATTERY (${deadlineStr})`,
+                    statusColor: '#f59e0b',
+                    strokeOverride: '#f59e0b',
+                    isFailed: false,
+                    isCriticalBattery: true,
+                    glitchBurst: false
+                });
+
+                if (leafletMap) {
+                    leafletMap.panTo([matchingNode.lat, matchingNode.lon], {
+                        animate: true,
+                        duration: 0.32
+                    });
+                }
+            }
+
+            updateTelemetry({
+                state: 'RUNNING',
+                evaluated: stepNum,
+                total: trace.length,
+                failed: impactedNodesSet.size,
+                survived: savedNodeIds.size,
+                budget: step.remaining_budget,
+                crews: step.remaining_crews
+            });
+
+            const critDesc = `[${clockStr}] Upstream lifeline from ${step.parent_node || 'Epicenter'} severed. Entered CRITICAL_BATTERY (${backupHrs}h UPS reserve; deadline ${deadlineStr}). ${step.reasoning || ''}`.trim();
+
+            appendFeedCard({
+                variant: 'warning',
+                iconSvg: FEED_SVGS.warning,
+                iconClass: 'warning-icon',
+                title: `${nodeName} — Critical Battery`,
+                pillText: `CRITICAL_BATTERY • Dies ${deadlineStr}`,
+                pillClass: 'pill-warning',
+                description: critDesc,
+                simTimeText: clockStr,
+                sviScore: stepSvi,
+                populationServed: stepPop,
+                pdfSummary: `[${clockStr}] [STEP ${stepNum}/${trace.length}] [CRITICAL_BATTERY] ${nodeName}: ${critDesc}`
+            });
+
+            await new Promise(resolve => setTimeout(resolve, 480));
+            continue;
+        }
+
+        // 3. RECOVERY_COMPLETED EVENT (Field crew finishes before battery_deadline -> ONLINE)
+        const hasRecoveryEdge = Boolean(step.new_edge && step.new_edge.source && step.new_edge.target);
+        if (step.step === 'recovery_completed' || evType === 'RECOVERY_COMPLETED' || (step.status && hasRecoveryEdge)) {
+            criticalBatteryNodesSet.delete(nodeId);
+            impactedNodesSet.add(nodeId);
+            savedNodeIds.add(nodeId);
+
+            if (matchingNode && leafletMap) {
                 leafletMap.panTo([matchingNode.lat, matchingNode.lon], {
                     animate: true,
-                    duration: 0.35
+                    duration: 0.32
                 });
             }
-        }
 
-        await new Promise(resolve => setTimeout(resolve, 380));
+            const estCost = step.new_edge ? (step.new_edge.cost ?? step.new_edge.estimated_cost ?? step.estimated_cost) : step.estimated_cost;
+            const crewsUsed = step.new_edge ? (step.new_edge.crews_used ?? 1) : 1;
+            const recTimeMin = step.new_edge ? (step.new_edge.recovery_time_ms ?? step.recovery_time_ms) : step.recovery_time_ms;
+            const recTimeDisplay = (step.new_edge && step.new_edge.recovery_time_display) || (
+                recTimeMin !== undefined && recTimeMin !== null
+                    ? (Number(recTimeMin) >= 60
+                        ? `${Math.floor(Number(recTimeMin) / 60)}h${Number(recTimeMin) % 60 > 0 ? ` ${Number(recTimeMin) % 60}m` : ''}`
+                        : `${Number(recTimeMin)} min`)
+                    : '1h 30m'
+            );
 
-        const survived = Boolean(step.status);
-        if (survived) {
-            survivedCount++;
-        } else {
-            failedCount++;
-        }
-        evaluatedSet.add(nodeId);
+            if (hasRecoveryEdge) {
+                const healEdgeId = `heal_edge_${stepNum}_${step.new_edge.source}_${step.new_edge.target}`;
+                if (!topologyEdges.some(e => e.id === healEdgeId)) {
+                    const newHealEdge = {
+                        id: healEdgeId,
+                        from: step.new_edge.source,
+                        to: step.new_edge.target,
+                        color: '#38bdf8',
+                        customColor: true,
+                        weight: 3.2,
+                        dashArray: '8, 6',
+                        isDynamic: true,
+                        estimatedCost: estCost,
+                        crewsUsed: crewsUsed,
+                        recoveryTimeDisplay: recTimeDisplay,
+                        targetSector: nodeType,
+                        restoredAtClock: clockStr
+                    };
+                    topologyEdges.push(newHealEdge);
+                    renderSingleEdgeOnMap(newHealEdge);
+                }
+            }
 
-        const statusBadge = survived ? '• Intact' : '• Failed';
-        const statusStroke = survived ? '#10b981' : '#ef4444';
+            if (matchingNode) {
+                const srcName = hasRecoveryEdge ? step.new_edge.source : 'Backup Feed';
+                setNodeVisualState(nodeId, {
+                    statusText: `ONLINE — AI Restored via ${srcName} at ${clockStr}`,
+                    statusBadge: `• AI Restored (${clockStr})`,
+                    statusColor: '#38bdf8',
+                    strokeOverride: '#38bdf8',
+                    isFailed: false,
+                    isCriticalBattery: false,
+                    glitchBurst: false
+                });
+            }
 
-        if (matchingNode) {
-            setNodeVisualState(nodeId, {
-                statusText: survived ? 'Operational (Survived)' : 'Cascade Failure',
-                statusBadge,
-                statusColor: statusStroke,
-                strokeOverride: statusStroke,
-                isFailed: !survived,
-                glitchBurst: !survived
+            updateTelemetry({
+                state: 'RUNNING',
+                evaluated: stepNum,
+                total: trace.length,
+                failed: impactedNodesSet.size,
+                survived: savedNodeIds.size,
+                budget: step.remaining_budget,
+                crews: step.remaining_crews
             });
+
+            const remStateStr = (step.remaining_budget !== undefined && step.remaining_crews !== undefined)
+                ? ` • Remaining: $${Math.round(Number(step.remaining_budget)).toLocaleString()} & ${step.remaining_crews} crew(s)`
+                : '';
+            const metricsSuffix = (estCost !== undefined && estCost !== null)
+                ? ` (Cost: $${Number(estCost).toLocaleString()} • Crews: ${crewsUsed} • Field Time: ${recTimeDisplay}${remStateStr})`
+                : '';
+            const routeText = hasRecoveryEdge ? `${step.new_edge.source} → ${step.new_edge.target}` : nodeName;
+            const rerouteSummary = `[${clockStr}] RECOVERY_COMPLETED before battery deadline: Rerouted ${routeText}.${metricsSuffix} ${step.reasoning || ''}`.trim();
+
+            appendFeedCard({
+                variant: 'recovery',
+                iconSvg: FEED_SVGS.shield,
+                iconClass: 'recovery-icon',
+                title: `${nodeName} — Recovery Completed`,
+                pillText: `ONLINE • ${routeText}`,
+                pillClass: 'pill-recovery',
+                description: rerouteSummary,
+                simTimeText: clockStr,
+                sviScore: stepSvi,
+                populationServed: stepPop,
+                pdfSummary: `[${clockStr}] [STEP ${stepNum}/${trace.length}] [RECOVERY_COMPLETED] ${rerouteSummary}`
+            });
+
+            await new Promise(resolve => setTimeout(resolve, 520));
+            continue;
         }
+
+        // 4. BATTERY_DEPLETED EVENT (Backup battery expired before recovery -> OFFLINE & cascades downstream)
+        criticalBatteryNodesSet.delete(nodeId);
+        impactedNodesSet.add(nodeId);
+        offlineNodesSet.add(nodeId);
 
         topologyEdges.forEach(edge => {
             const matches = step.parent_node
                 ? (edge.from === step.parent_node && edge.to === nodeId) ||
                   (edge.from === nodeId && edge.to === step.parent_node)
-                : edge.to === nodeId && evaluatedSet.has(edge.from);
+                : edge.to === nodeId && offlineNodesSet.has(edge.from);
 
             if (matches) {
-                edge.color = survived ? '#10b981' : '#ef4444';
+                edge.color = '#ef4444';
                 edge.customColor = true;
                 edge.weight = 3.0;
                 renderSingleEdgeOnMap(edge);
             }
         });
 
+        if (matchingNode) {
+            if (leafletMap) {
+                leafletMap.panTo([matchingNode.lat, matchingNode.lon], {
+                    animate: true,
+                    duration: 0.32
+                });
+            }
+            setNodeVisualState(nodeId, {
+                statusText: `OFFLINE — Battery Depleted at ${clockStr}`,
+                statusBadge: `• OFFLINE (${clockStr})`,
+                statusColor: '#ef4444',
+                strokeOverride: '#ef4444',
+                isFailed: true,
+                isCriticalBattery: false,
+                glitchBurst: true
+            });
+        }
+
         updateTelemetry({
             state: 'RUNNING',
             evaluated: stepNum,
             total: trace.length,
-            failed: failedCount,
-            survived: survivedCount
+            failed: impactedNodesSet.size,
+            survived: savedNodeIds.size,
+            budget: step.remaining_budget,
+            crews: step.remaining_crews
         });
 
-        const connectionContext = step.parent_node
-            ? `${step.parent_node} → ${nodeName}`
-            : nodeName;
+        const remStateStr = (step.remaining_budget !== undefined && step.remaining_crews !== undefined)
+            ? ` [Remaining Budget: $${Math.round(Number(step.remaining_budget)).toLocaleString()} | Crews Left: ${step.remaining_crews}]`
+            : '';
+        const failureDesc = `[${clockStr}] BATTERY_DEPLETED — Transitioned to OFFLINE and cascading failure downstream. ${step.reasoning || ''} (Severed upstream: ${step.parent_node || 'Epicenter'})${remStateStr}`.trim();
 
-        if (survived) {
-            appendFeedCard({
-                variant: 'survive',
-                iconSvg: FEED_SVGS.survive,
-                iconClass: 'survive-icon',
-                title: nodeName,
-                pillText: 'Survived',
-                pillClass: 'pill-survive',
-                description: `${step.reasoning} (Dependency: ${connectionContext})`,
-                pdfSummary: `[STEP ${stepNum}/${trace.length}] ${connectionContext} [SURVIVED]: ${step.reasoning}`
-            });
-        } else {
-            const hasRecoveryEdge = Boolean(step.new_edge && step.new_edge.source && step.new_edge.target);
-            const failureDesc = hasRecoveryEdge
-                ? `Upstream dependency from ${step.parent_node || 'Epicenter'} was severed by the disaster impact.`
-                : `${step.reasoning} (Upstream failure: ${step.parent_node || 'Epicenter'})`;
-            appendFeedCard({
-                variant: 'fail',
-                iconSvg: FEED_SVGS.fail,
-                iconClass: 'fail-icon',
-                title: nodeName,
-                pillText: 'Cascade Failure',
-                pillClass: 'pill-fail',
-                description: failureDesc,
-                pdfSummary: `[STEP ${stepNum}/${trace.length}] ${connectionContext} [FAILED]: ${failureDesc}`
-            });
-        }
+        appendFeedCard({
+            variant: 'fail',
+            iconSvg: FEED_SVGS.fail,
+            iconClass: 'fail-icon',
+            title: `${nodeName} — Battery Depleted`,
+            pillText: `OFFLINE (${clockStr})`,
+            pillClass: 'pill-fail',
+            description: failureDesc,
+            simTimeText: clockStr,
+            sviScore: stepSvi,
+            populationServed: stepPop,
+            pdfSummary: `[${clockStr}] [STEP ${stepNum}/${trace.length}] [BATTERY_DEPLETED — OFFLINE] ${nodeName}: ${failureDesc}`
+        });
 
-        if (step.new_edge && step.new_edge.source && step.new_edge.target) {
-            await new Promise(resolve => setTimeout(resolve, 320));
-
-            const healEdgeId = `heal_edge_${stepNum}_${step.new_edge.source}_${step.new_edge.target}`;
-            if (!topologyEdges.some(e => e.id === healEdgeId)) {
-                const newHealEdge = {
-                    id: healEdgeId,
-                    from: step.new_edge.source,
-                    to: step.new_edge.target,
-                    color: '#38bdf8',
-                    customColor: true,
-                    weight: 3.2,
-                    dashArray: '8, 6',
-                    isDynamic: true
-                };
-                topologyEdges.push(newHealEdge);
-                renderSingleEdgeOnMap(newHealEdge);
-            }
-
-            savedNodeIds.add(nodeId);
-
-            if (matchingNode) {
-                setNodeVisualState(nodeId, {
-                    statusText: `AI Restored via ${step.new_edge.source}`,
-                    statusBadge: '• AI Restored',
-                    statusColor: '#38bdf8',
-                    strokeOverride: '#38bdf8',
-                    isFailed: false,
-                    glitchBurst: false
-                });
-            }
-
-            const estCost = step.new_edge.estimated_cost ?? step.estimated_cost;
-            const recTimeMs = step.new_edge.recovery_time_ms ?? step.recovery_time_ms;
-            const metricsSuffix = (estCost !== undefined && estCost !== null && recTimeMs !== undefined && recTimeMs !== null)
-                ? ` (Est. Cost: $${Number(estCost).toLocaleString()} • Latency: ${recTimeMs} ms)`
-                : '';
-            const llmRecoveryReason = step.reasoning ? ` AI Recovery Rationale: ${step.reasoning}` : '';
-            const rerouteSummary = `Emergency supply rerouted from ${step.new_edge.source} to ${step.new_edge.target} — service restored.${metricsSuffix}${llmRecoveryReason}`;
-            appendFeedCard({
-                variant: 'recovery',
-                iconSvg: FEED_SVGS.shield,
-                iconClass: 'recovery-icon',
-                title: 'AI Rerouting Active',
-                pillText: `${step.new_edge.source} → ${step.new_edge.target}`,
-                pillClass: 'pill-recovery',
-                description: rerouteSummary,
-                pdfSummary: `[AI REROUTING ACTIVE] ${rerouteSummary}`
-            });
-
-            await new Promise(resolve => setTimeout(resolve, 750));
-        } else {
-            await new Promise(resolve => setTimeout(resolve, 500));
-        }
+        await new Promise(resolve => setTimeout(resolve, 480));
     }
+
+    const lastStep = trace.length > 0 ? trace[trace.length - 1] : {};
+    const finalClockHours = Number(lastStep.event_time ?? currentSimulationClockHours);
+    const finalClockStr = formatSimulationClock(finalClockHours);
+    setGlobalSimulationClock(finalClockHours, false);
 
     updateTelemetry({
         state: 'COMPLETE',
         evaluated: trace.length,
         total: trace.length,
-        failed: failedCount,
-        survived: survivedCount
+        failed: impactedNodesSet.size,
+        survived: savedNodeIds.size,
+        budget: lastStep.remaining_budget,
+        crews: lastStep.remaining_crews
     });
 
+    const finalBudgetStr = lastStep.remaining_budget !== undefined
+        ? `$${Math.round(Number(lastStep.remaining_budget)).toLocaleString()}`
+        : 'N/A';
+    const finalCrewsStr = lastStep.remaining_crews !== undefined
+        ? `${lastStep.remaining_crews}`
+        : 'N/A';
+
     appendSystemCard(
-        'Cascade Assessment Complete',
-        `${failedCount} nodes impacted (${savedNodeIds.size} automatically restored via AI rerouting), ${survivedCount} remained intact.`
+        `DES Cascade Complete at ${finalClockStr}`,
+        `${impactedNodesSet.size} facilities impacted across ${trace.length} discrete events: ${savedNodeIds.size} restored before battery depletion, ${offlineNodesSet.size} collapsed to OFFLINE. Final Clock: ${finalClockStr} • Remaining Budget: ${finalBudgetStr} • Remaining Crews: ${finalCrewsStr}.`,
+        finalClockStr
     );
 
     fitAllNodesBounds(true);
@@ -1212,15 +1574,17 @@ async function animateExecutionTrace(trace) {
 }
 
 /**
- * Renders a high-resolution vector canvas snapshot of the Miami topology & self-healing links
- * for the PDF Incident Report (avoiding cross-origin tile taint issues).
+ * Renders a high-resolution vector canvas snapshot of the Miami city topology,
+ * prominently highlighting the NEW AI-RESTORED CONNECTIONS, severed cascade links,
+ * and failed/restored nodes for the PDF Incident Report.
  */
-function renderTopologySnapshotCanvas(targetWidth = 1200, targetHeight = 520) {
+function renderTopologySnapshotCanvas(targetWidth = 1400, targetHeight = 680) {
     const snapshotCanvas = document.createElement('canvas');
     snapshotCanvas.width = targetWidth;
     snapshotCanvas.height = targetHeight;
     const ctx = snapshotCanvas.getContext('2d');
 
+    // Deep slate GIS background
     ctx.fillStyle = '#090d14';
     ctx.fillRect(0, 0, targetWidth, targetHeight);
 
@@ -1229,16 +1593,41 @@ function renderTopologySnapshotCanvas(targetWidth = 1200, targetHeight = 520) {
     ctx.lineWidth = 1;
     for (let x = 60; x < targetWidth; x += 60) {
         ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, targetHeight);
+        ctx.moveTo(x, 46);
+        ctx.lineTo(x, targetHeight - 40);
         ctx.stroke();
     }
-    for (let y = 60; y < targetHeight; y += 60) {
+    for (let y = 60; y < targetHeight - 40; y += 60) {
         ctx.beginPath();
         ctx.moveTo(0, y);
         ctx.lineTo(targetWidth, y);
         ctx.stroke();
     }
+
+    // Top Map Banner
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(0, 0, targetWidth, 44);
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.35)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, 44);
+    ctx.lineTo(targetWidth, 44);
+    ctx.stroke();
+
+    const restoredEdgesCount = topologyEdges.filter(e => e.isDynamic).length;
+    ctx.font = '700 14px Inter, sans-serif';
+    ctx.fillStyle = '#f8fafc';
+    ctx.textAlign = 'left';
+    ctx.fillText('MIAMI INFRASTRUCTURE GRID — NEW AI-RESTORED CONNECTIONS & CASCADE MAP', 20, 27);
+
+    ctx.font = '700 12px Inter, sans-serif';
+    ctx.fillStyle = '#38bdf8';
+    ctx.textAlign = 'right';
+    ctx.fillText(
+        `${restoredEdgesCount} New Restored Connection${restoredEdgesCount === 1 ? '' : 's'} • ${savedNodeIds.size} Restored Nodes • ${topologyNodes.length} Total Nodes`,
+        targetWidth - 20,
+        27
+    );
 
     if (topologyNodes.length === 0) return snapshotCanvas;
 
@@ -1250,75 +1639,193 @@ function renderTopologySnapshotCanvas(targetWidth = 1200, targetHeight = 520) {
         if (n.lon > maxLon) maxLon = n.lon;
     });
 
-    const padX = 95;
-    const padY = 65;
+    const padX = 110;
+    const padTop = 82;
+    const padBottom = 82;
     const latSpan = Math.max(0.01, maxLat - minLat);
     const lonSpan = Math.max(0.01, maxLon - minLon);
 
     const project = (node) => ({
         x: padX + ((node.lon - minLon) / lonSpan) * (targetWidth - padX * 2),
-        y: padY + ((maxLat - node.lat) / latSpan) * (targetHeight - padY * 2)
+        y: padTop + ((maxLat - node.lat) / latSpan) * (targetHeight - padTop - padBottom)
     });
 
-    // Draw edges
-    topologyEdges.forEach(edge => {
-        const src = topologyNodes.find(n => n.id === edge.from || n.name === edge.from);
-        const tgt = topologyNodes.find(n => n.id === edge.to || n.name === edge.to);
-        if (!src || !tgt) return;
-        const p1 = project(src);
-        const p2 = project(tgt);
-
+    function drawDirectedEdge(p1, p2, color, width, dashed = false, glow = false, calloutText = '') {
         ctx.save();
-        ctx.beginPath();
-        if (edge.dashArray) {
-            ctx.setLineDash([8, 6]);
+        if (glow) {
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(56, 189, 248, 0.28)';
+            ctx.lineWidth = width + 5;
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.stroke();
         }
-        ctx.strokeStyle = edge.color || 'rgba(148, 163, 184, 0.45)';
-        ctx.lineWidth = edge.weight || 2;
+
+        ctx.beginPath();
+        if (dashed) {
+            ctx.setLineDash([10, 6]);
+        }
+        ctx.strokeStyle = color;
+        ctx.lineWidth = width;
         ctx.moveTo(p1.x, p1.y);
         ctx.lineTo(p2.x, p2.y);
         ctx.stroke();
+        ctx.setLineDash([]);
+
+        // Directional arrowhead at 62% along the edge
+        const mx = p1.x + (p2.x - p1.x) * 0.62;
+        const my = p1.y + (p2.y - p1.y) * 0.62;
+        const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+        const arrowLen = dashed ? 10 : 7;
+
+        ctx.beginPath();
+        ctx.moveTo(mx + Math.cos(angle) * arrowLen, my + Math.sin(angle) * arrowLen);
+        ctx.lineTo(mx + Math.cos(angle - 2.5) * arrowLen * 0.75, my + Math.sin(angle - 2.5) * arrowLen * 0.75);
+        ctx.lineTo(mx + Math.cos(angle + 2.5) * arrowLen * 0.75, my + Math.sin(angle + 2.5) * arrowLen * 0.75);
+        ctx.closePath();
+        ctx.fillStyle = color;
+        ctx.fill();
+
+        if (calloutText) {
+            const cx = p1.x + (p2.x - p1.x) * 0.5;
+            const cy = p1.y + (p2.y - p1.y) * 0.5;
+            ctx.font = '700 9.5px Inter, sans-serif';
+            const textW = ctx.measureText(calloutText).width + 10;
+            ctx.fillStyle = 'rgba(8, 47, 73, 0.94)';
+            ctx.strokeStyle = '#38bdf8';
+            ctx.lineWidth = 1.2;
+            ctx.beginPath();
+            ctx.roundRect(cx - textW / 2, cy - 9, textW, 18, 4);
+            ctx.fill();
+            ctx.stroke();
+            ctx.fillStyle = '#e0f2fe';
+            ctx.textAlign = 'center';
+            ctx.fillText(calloutText, cx, cy + 3.5);
+        }
         ctx.restore();
+    }
+
+    const baseEdges = topologyEdges.filter(e => !e.isDynamic && !e.customColor);
+    const cascadeEdges = topologyEdges.filter(e => !e.isDynamic && e.customColor);
+    const restoredEdges = topologyEdges.filter(e => e.isDynamic);
+
+    // 1. Draw baseline intact edges (subtle)
+    baseEdges.forEach(edge => {
+        const src = topologyNodes.find(n => n.id === edge.from || n.name === edge.from);
+        const tgt = topologyNodes.find(n => n.id === edge.to || n.name === edge.to);
+        if (!src || !tgt) return;
+        drawDirectedEdge(project(src), project(tgt), 'rgba(148, 163, 184, 0.25)', 1.5, false, false);
     });
 
-    // Draw nodes & labels
+    // 2. Draw severed / evaluated cascade edges
+    cascadeEdges.forEach(edge => {
+        const src = topologyNodes.find(n => n.id === edge.from || n.name === edge.from);
+        const tgt = topologyNodes.find(n => n.id === edge.to || n.name === edge.to);
+        if (!src || !tgt) return;
+        drawDirectedEdge(project(src), project(tgt), edge.color || '#ef4444', 2.4, false, false);
+    });
+
+    // 3. Draw NEW AI-RESTORED CONNECTIONS prominently on top
+    restoredEdges.forEach(edge => {
+        const src = topologyNodes.find(n => n.id === edge.from || n.name === edge.from);
+        const tgt = topologyNodes.find(n => n.id === edge.to || n.name === edge.to);
+        if (!src || !tgt) return;
+        const label = edge.recoveryTimeDisplay ? `AI RESTORED (${edge.recoveryTimeDisplay})` : 'AI RESTORED';
+        drawDirectedEdge(project(src), project(tgt), '#38bdf8', 3.4, true, true, label);
+    });
+
+    // 4. Draw nodes & status rings
     topologyNodes.forEach(node => {
         const pt = project(node);
         const st = nodeStateMap.get(node.id) || {};
-        const color = st.strokeOverride || getSectorAccentColor(node.type);
+        const isEpicenter = impactNodeId === node.id;
+        const isRestored = savedNodeIds.has(node.id);
+        const isFailed = Boolean(st.isFailed || (isEpicenter && !isRestored));
+        const color = isRestored
+            ? '#38bdf8'
+            : isFailed
+            ? '#ef4444'
+            : (st.strokeOverride || getSectorAccentColor(node.type));
 
         ctx.save();
+
+        // Outer ring for Restored or Failed/Epicenter nodes
+        if (isRestored || isFailed) {
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, 18, 0, Math.PI * 2);
+            ctx.strokeStyle = isRestored ? 'rgba(56, 189, 248, 0.75)' : 'rgba(239, 68, 68, 0.8)';
+            ctx.lineWidth = 2.2;
+            ctx.stroke();
+        }
+
         ctx.beginPath();
-        ctx.arc(pt.x, pt.y, 12, 0, Math.PI * 2);
+        ctx.arc(pt.x, pt.y, 12.5, 0, Math.PI * 2);
         ctx.fillStyle = '#0f172a';
         ctx.fill();
-        ctx.lineWidth = 2.8;
+        ctx.lineWidth = 3;
         ctx.strokeStyle = color;
         ctx.stroke();
 
-        ctx.font = '600 11px Inter, sans-serif';
+        // Inner sector dot
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, 4.5, 0, Math.PI * 2);
+        ctx.fillStyle = getSectorAccentColor(node.type);
+        ctx.fill();
+
+        ctx.font = '600 10.5px Inter, sans-serif';
         ctx.fillStyle = '#f8fafc';
         ctx.textAlign = 'center';
-        ctx.fillText(truncateLabel(node.name, 18), pt.x, pt.y + 26);
+        ctx.fillText(truncateLabel(node.name, 20), pt.x, pt.y + 27);
         if (st.statusBadge) {
-            ctx.font = '700 10px Inter, sans-serif';
+            ctx.font = '700 9.5px Inter, sans-serif';
             ctx.fillStyle = st.statusColor || color;
             ctx.fillText(st.statusBadge, pt.x, pt.y + 39);
         }
         ctx.restore();
     });
 
+    // Bottom Legend Bar
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(0, targetHeight - 38, targetWidth, 38);
+    ctx.strokeStyle = 'rgba(148, 163, 184, 0.22)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, targetHeight - 38);
+    ctx.lineTo(targetWidth, targetHeight - 38);
+    ctx.stroke();
+
+    ctx.font = '600 11px Inter, sans-serif';
+    ctx.textAlign = 'left';
+    const legendY = targetHeight - 15;
+
+    ctx.fillStyle = '#38bdf8';
+    ctx.fillText('━━━ (Dashed Cyan) New AI-Restored Connection', 20, legendY);
+
+    ctx.fillStyle = '#f87171';
+    ctx.fillText('━━━ (Solid Red) Severed Upstream Dependency', 330, legendY);
+
+    ctx.fillStyle = '#94a3b8';
+    ctx.fillText('━━━ (Slate) Intact Grid Link', 640, legendY);
+
+    ctx.fillStyle = '#38bdf8';
+    ctx.fillText('◎ Cyan Ring: AI-Restored Facility', 855, legendY);
+
+    ctx.fillStyle = '#f87171';
+    ctx.fillText('◎ Red Ring: Epicenter / Failed Facility', 1105, legendY);
+
     return snapshotCanvas;
 }
 
 /**
- * Captures the topology snapshot and Incident Timeline feed,
- * populates #pdf-template, and generates a downloadable WeatherFall_Report.pdf via html2pdf.js.
+ * Captures the restored-connections topology snapshot, populates the New Restored Connections
+ * table and the Complete Failed Nodes Trace table in #pdf-template, and generates WeatherFall_Report.pdf.
  */
 async function exportPDFReport() {
     const pdfTemplate = document.getElementById('pdf-template');
     const mapSnapshotImg = document.getElementById('pdf-map-snapshot');
     const traceLogPre = document.getElementById('pdf-trace-log');
+    const restoredEdgesBody = document.getElementById('pdf-restored-edges-body');
+    const failedNodesBody = document.getElementById('pdf-failed-nodes-body');
     const consoleLog = document.getElementById('console-log');
     const exportPdfBtn = document.getElementById('export-pdf-btn');
 
@@ -1347,15 +1854,136 @@ async function exportPDFReport() {
         const pdfMagnitude = document.getElementById('pdf-disaster-magnitude');
         const pdfTrajectory = document.getElementById('pdf-disaster-trajectory');
         const pdfOutcome = document.getElementById('pdf-cascade-outcome');
+        const pdfRestoredCount = document.getElementById('pdf-restored-count');
+        const pdfTotalMetrics = document.getElementById('pdf-total-recovery-metrics');
+
+        // Compute aggregate recovery metrics from lastSimulationTrace
+        let totalCostUsd = 0;
+        let totalCrewsUsed = 0;
+        let maxRecoveryMin = 0;
+        const restoredSteps = [];
+        const failedSteps = [];
+
+        lastSimulationTrace.forEach((step, idx) => {
+            const isImpact = step.step === 'impact' || step.event_type === 'EPICENTER_IMPACT';
+            const isCritBattery = step.step === 'critical_battery' || step.event_type === 'CRITICAL_BATTERY';
+            const hasReroute = Boolean(step.new_edge && step.new_edge.source && step.new_edge.target);
+            const isFailed = isImpact || isCritBattery || step.status === false || hasReroute;
+            if (isFailed) {
+                failedSteps.push({ ...step, stepNumber: idx + 1 });
+            }
+            if (hasReroute) {
+                const c = Number(step.new_edge.cost ?? step.new_edge.estimated_cost ?? step.estimated_cost ?? 0);
+                const crews = Number(step.new_edge.crews_used ?? 1);
+                const m = Number(step.new_edge.recovery_time_ms ?? step.recovery_time_ms ?? 0);
+                if (Number.isFinite(c) && c > 0) totalCostUsd += c;
+                if (Number.isFinite(crews) && crews > 0) totalCrewsUsed += crews;
+                if (Number.isFinite(m) && m > maxRecoveryMin) maxRecoveryMin = m;
+                restoredSteps.push({
+                    stepNumber: idx + 1,
+                    eventClock: formatSimulationClock(step.event_time ?? 0),
+                    source: step.new_edge.source,
+                    target: step.new_edge.target,
+                    sector: (step.node_type || 'energy').toUpperCase(),
+                    costUsd: c,
+                    crewsUsed: crews,
+                    recoveryMin: m,
+                    recoveryDisplay: step.new_edge.recovery_time_display || (
+                        m >= 60 ? `${Math.floor(m / 60)}h${m % 60 > 0 ? ` ${m % 60}m` : ''}` : `${m} min`
+                    )
+                });
+            }
+        });
+
+        const maxRecDisplay = maxRecoveryMin > 0
+            ? (maxRecoveryMin >= 60
+                ? `${Math.floor(maxRecoveryMin / 60)}h${maxRecoveryMin % 60 > 0 ? ` ${maxRecoveryMin % 60}m` : ''}`
+                : `${maxRecoveryMin} min`)
+            : 'N/A';
 
         if (pdfTimestamp) pdfTimestamp.textContent = new Date().toLocaleString('en-US', { hour12: false });
         if (pdfDisasterType) pdfDisasterType.textContent = disasterSelect ? disasterSelect.value : 'Hurricane';
         if (pdfMagnitude) pdfMagnitude.textContent = magnitudeInput ? magnitudeInput.value : 'Category 5';
         if (pdfTrajectory) pdfTrajectory.textContent = trajectoryInput ? trajectoryInput.value : 'Atlantic East Coast';
         if (pdfOutcome) {
-            const failedVal = statFailed ? statFailed.textContent : '0';
-            const survivedVal = statSurvived ? statSurvived.textContent : '0';
-            pdfOutcome.textContent = `${failedVal} Impacted (${savedNodeIds.size} Restored by AI) / ${survivedVal} Intact`;
+            const failedVal = statFailed ? statFailed.textContent : String(failedSteps.length);
+            const unrecoveredVal = Math.max(0, Number(failedVal) - savedNodeIds.size);
+            pdfOutcome.textContent = `${failedVal} Impacted (${savedNodeIds.size} Saved / ${unrecoveredVal} Offline)`;
+        }
+        if (pdfRestoredCount) {
+            pdfRestoredCount.textContent = `${restoredSteps.length} Links (${totalCrewsUsed} Crews Assigned)`;
+        }
+        if (pdfTotalMetrics) {
+            pdfTotalMetrics.textContent = totalCostUsd > 0
+                ? `$${totalCostUsd.toLocaleString()} • Peak Est. ${maxRecDisplay}`
+                : 'No Rerouting Executed';
+        }
+
+        // Populate Section 1.1: New AI-Restored City Connections Table
+        if (restoredEdgesBody) {
+            if (restoredSteps.length === 0) {
+                restoredEdgesBody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#64748b;">No emergency AI-restored connections were created in this run.</td></tr>`;
+            } else {
+                restoredEdgesBody.innerHTML = restoredSteps.map((r, i) => `
+                    <tr class="pdf-row-restored">
+                        <td><strong>#${i + 1}</strong> (${escapeHtml(r.eventClock)})</td>
+                        <td><strong>${escapeHtml(r.source)}</strong></td>
+                        <td><strong>${escapeHtml(r.target)}</strong></td>
+                        <td>${escapeHtml(r.sector)}</td>
+                        <td><strong>$${Number(r.costUsd).toLocaleString()}</strong> (${r.crewsUsed} crew${r.crewsUsed === 1 ? '' : 's'})</td>
+                        <td><strong>${escapeHtml(r.recoveryDisplay)}</strong></td>
+                    </tr>
+                `).join('');
+            }
+        }
+
+        // Populate Section 2: Complete Trace of Failed & Impacted Nodes Table
+        if (failedNodesBody) {
+            if (failedSteps.length === 0) {
+                failedNodesBody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:#64748b;">No failed nodes recorded.</td></tr>`;
+            } else {
+                failedNodesBody.innerHTML = failedSteps.map(f => {
+                    const nodeName = f.node || f.child_node || f.node_name || 'Unknown';
+                    const sector = (f.node_type || 'energy').toUpperCase();
+                    const evClock = formatSimulationClock(f.event_time ?? 0);
+                    const isImpact = f.step === 'impact' || f.event_type === 'EPICENTER_IMPACT';
+                    const isCritBattery = f.step === 'critical_battery' || f.event_type === 'CRITICAL_BATTERY';
+                    const hasReroute = Boolean(f.new_edge && f.new_edge.source && f.new_edge.target);
+                    const rowClass = isImpact ? 'pdf-row-epicenter' : (hasReroute ? 'pdf-row-restored' : '');
+                    const parentLabel = isImpact ? 'Direct Disaster Impact (Epicenter)' : (f.parent_node || 'Upstream Supply');
+
+                    const statusPill = isImpact
+                        ? `<span class="pdf-status-pill pdf-pill-epicenter">EPICENTER (${escapeHtml(evClock)})</span>`
+                        : isCritBattery
+                        ? `<span class="pdf-status-pill pdf-pill-epicenter">CRITICAL BATTERY (${escapeHtml(evClock)})</span>`
+                        : hasReroute
+                        ? `<span class="pdf-status-pill pdf-pill-restored">AI RESTORED (${escapeHtml(evClock)})</span>`
+                        : `<span class="pdf-status-pill pdf-pill-failed">OFFLINE (${escapeHtml(evClock)})</span>`;
+
+                    let rerouteCell = '—';
+                    if (hasReroute) {
+                        const costVal = Number(f.new_edge.cost ?? f.new_edge.estimated_cost ?? f.estimated_cost ?? 0);
+                        const crewsVal = Number(f.new_edge.crews_used ?? 1);
+                        const minVal = Number(f.new_edge.recovery_time_ms ?? f.recovery_time_ms ?? 0);
+                        const dispVal = f.new_edge.recovery_time_display || (
+                            minVal >= 60 ? `${Math.floor(minVal / 60)}h${minVal % 60 > 0 ? ` ${minVal % 60}m` : ''}` : `${minVal} min`
+                        );
+                        rerouteCell = `<strong>${escapeHtml(f.new_edge.source)} → ${escapeHtml(f.new_edge.target)}</strong><br><span style="color:#0369a1;font-weight:600;">Cost: $${costVal.toLocaleString()} • Crews: ${crewsVal} • Time: ${escapeHtml(dispVal)}</span>`;
+                    }
+
+                    return `
+                        <tr class="${rowClass}">
+                            <td><strong>#${f.stepNumber}</strong><br><small>${escapeHtml(evClock)}</small></td>
+                            <td><strong>${escapeHtml(nodeName)}</strong></td>
+                            <td>${escapeHtml(sector)}</td>
+                            <td>${escapeHtml(parentLabel)}</td>
+                            <td>${statusPill}</td>
+                            <td>${rerouteCell}</td>
+                            <td>${escapeHtml(f.reasoning || '')}</td>
+                        </tr>
+                    `;
+                }).join('');
+            }
         }
 
         if (consoleLog) {
@@ -1397,7 +2025,7 @@ async function exportPDFReport() {
             });
         }
 
-        const snapshotCanvas = renderTopologySnapshotCanvas(1200, 520);
+        const snapshotCanvas = renderTopologySnapshotCanvas(1400, 680);
         const canvasData = snapshotCanvas.toDataURL('image/png');
         await new Promise((resolve) => {
             mapSnapshotImg.onload = resolve;
@@ -1409,7 +2037,7 @@ async function exportPDFReport() {
 
         await html2pdf()
             .set({
-                margin: 10,
+                margin: 9,
                 filename: 'WeatherFall_Report.pdf',
                 image: { type: 'jpeg', quality: 0.98 },
                 pagebreak: {
@@ -1419,6 +2047,8 @@ async function exportPDFReport() {
                         '.pdf-summary-grid',
                         '.pdf-snapshot-frame',
                         '.pdf-section-title',
+                        '.pdf-subsection-title',
+                        '.pdf-data-table tr',
                         '.pdf-trace-line'
                     ]
                 },
@@ -1432,7 +2062,7 @@ async function exportPDFReport() {
             .from(pdfTemplate)
             .save();
 
-        appendSystemCard('Incident Report Exported', 'Downloaded WeatherFall_Report.pdf successfully.');
+        appendSystemCard('Incident Report Exported', 'Downloaded WeatherFall_Report.pdf with restored city connections map and complete failed nodes trace.');
     } catch (err) {
         appendFeedCard({
             variant: 'fail',
