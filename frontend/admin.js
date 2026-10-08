@@ -3,6 +3,40 @@
 const TOKEN_KEY = 'weatherfall_token';
 const USER_KEY = 'weatherfall_username';
 const ADMIN_KEY = 'weatherfall_is_admin';
+const THEME_STORAGE_KEY = 'weatherfall_theme';
+
+let currentTheme = localStorage.getItem(THEME_STORAGE_KEY) === 'light' ? 'light' : 'dark';
+
+function applyTheme(theme) {
+    currentTheme = theme === 'light' ? 'light' : 'dark';
+    localStorage.setItem(THEME_STORAGE_KEY, currentTheme);
+    document.documentElement.setAttribute('data-theme', currentTheme);
+    if (document.body) {
+        document.body.setAttribute('data-theme', currentTheme);
+    }
+
+    const sunIcon = document.getElementById('theme-icon-sun');
+    const moonIcon = document.getElementById('theme-icon-moon');
+    const labelEl = document.getElementById('theme-toggle-label');
+    if (sunIcon && moonIcon && labelEl) {
+        if (currentTheme === 'light') {
+            sunIcon.classList.add('hidden');
+            moonIcon.classList.remove('hidden');
+            labelEl.textContent = 'Dark';
+        } else {
+            sunIcon.classList.remove('hidden');
+            moonIcon.classList.add('hidden');
+            labelEl.textContent = 'Light';
+        }
+    }
+}
+
+function toggleTheme() {
+    applyTheme(currentTheme === 'light' ? 'dark' : 'light');
+}
+
+// Apply saved theme immediately to avoid flash of unstyled theme
+applyTheme(currentTheme);
 
 function getToken() {
     return localStorage.getItem(TOKEN_KEY);
@@ -36,6 +70,13 @@ function escapeHtml(value) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    applyTheme(currentTheme);
+
+    const themeToggleBtn = document.getElementById('theme-toggle-btn');
+    if (themeToggleBtn) {
+        themeToggleBtn.addEventListener('click', toggleTheme);
+    }
+
     const token = getToken();
     const isAdmin = localStorage.getItem(ADMIN_KEY) === 'true';
 
@@ -116,7 +157,7 @@ function renderNodes(nodes) {
             <td><span class="type-badge type-${escapeHtml(node.type)}">${escapeHtml(node.type)}</span></td>
             <td class="cell-num">${Number(node.x).toFixed(3)}</td>
             <td class="cell-num">${Number(node.y).toFixed(3)}</td>
-            <td><button type="button" class="delete-btn" data-id="${node.id}" title="Delete node">[ × ]</button></td>
+            <td><button type="button" class="delete-btn" data-id="${node.id}" title="Delete node">Delete</button></td>
         </tr>
     `).join('');
 
@@ -127,7 +168,7 @@ function renderNodes(nodes) {
                 return;
             }
             btn.disabled = true;
-            btn.textContent = '[ … ]';
+            btn.textContent = 'Deleting…';
             try {
                 const response = await fetch(`/api/v1/nodes/${id}`, {
                     method: 'DELETE',
@@ -145,7 +186,7 @@ function renderNodes(nodes) {
             } catch (err) {
                 window.alert(err.message);
                 btn.disabled = false;
-                btn.textContent = '[ × ]';
+                btn.textContent = 'Delete';
             }
         });
     });
@@ -168,7 +209,7 @@ async function submitNode() {
     }
 
     submit.disabled = true;
-    submit.textContent = '[ CREATING… ]';
+    submit.textContent = 'Creating…';
     msg.classList.add('hidden');
 
     try {
@@ -195,7 +236,7 @@ async function submitNode() {
         showMsg(`✕ ${err.message}`, 'error');
     } finally {
         submit.disabled = false;
-        submit.textContent = '[ CREATE NODE ]';
+        submit.textContent = 'Create Node';
     }
 }
 

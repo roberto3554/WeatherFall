@@ -3,6 +3,39 @@
 const TOKEN_KEY = 'weatherfall_token';
 const USER_KEY = 'weatherfall_username';
 const ADMIN_KEY = 'weatherfall_is_admin';
+const THEME_STORAGE_KEY = 'weatherfall_theme';
+
+let currentTheme = localStorage.getItem(THEME_STORAGE_KEY) === 'light' ? 'light' : 'dark';
+
+function applyTheme(theme) {
+    currentTheme = theme === 'light' ? 'light' : 'dark';
+    localStorage.setItem(THEME_STORAGE_KEY, currentTheme);
+    document.documentElement.setAttribute('data-theme', currentTheme);
+    if (document.body) {
+        document.body.setAttribute('data-theme', currentTheme);
+    }
+
+    const sunIcon = document.getElementById('theme-icon-sun');
+    const moonIcon = document.getElementById('theme-icon-moon');
+    const labelEl = document.getElementById('theme-toggle-label');
+    if (sunIcon && moonIcon && labelEl) {
+        if (currentTheme === 'light') {
+            sunIcon.classList.add('hidden');
+            moonIcon.classList.remove('hidden');
+            labelEl.textContent = 'Dark';
+        } else {
+            sunIcon.classList.remove('hidden');
+            moonIcon.classList.add('hidden');
+            labelEl.textContent = 'Light';
+        }
+    }
+}
+
+function toggleTheme() {
+    applyTheme(currentTheme === 'light' ? 'dark' : 'light');
+}
+
+applyTheme(currentTheme);
 
 function getNextUrl() {
     const params = new URLSearchParams(window.location.search);
@@ -10,6 +43,13 @@ function getNextUrl() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    applyTheme(currentTheme);
+
+    const themeToggleBtn = document.getElementById('theme-toggle-btn');
+    if (themeToggleBtn) {
+        themeToggleBtn.addEventListener('click', toggleTheme);
+    }
+
     // If already authenticated, redirect immediately
     const existing = localStorage.getItem(TOKEN_KEY);
     if (existing) {
@@ -36,7 +76,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         submitBtn.disabled = true;
-        submitBtn.textContent = '[ AUTHENTICATING… ]';
+        submitBtn.textContent = 'Authenticating…';
 
         try {
             const response = await fetch('/api/v1/auth/login', {
@@ -60,7 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (err) {
             showError(err.message || 'Authentication failed.');
             submitBtn.disabled = false;
-            submitBtn.textContent = '[ AUTHENTICATE ]';
+            submitBtn.textContent = 'Authenticate';
         }
     });
 
