@@ -103,10 +103,57 @@ function clearSession() {
     localStorage.removeItem(ADMIN_KEY);
 }
 
-function redirectToLogin() {
+let isRedirectingToLogin = false;
+
+async function redirectToLogin() {
+    if (isRedirectingToLogin) return;
+    isRedirectingToLogin = true;
+    const token = getToken();
     clearSession();
+    try {
+        await fetch('/api/v1/auth/logout', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+    } catch (_) {
+        // Proceed with redirect even if network is offline
+    }
     const next = encodeURIComponent(window.location.pathname || '/admin');
     window.location.replace(`/login?next=${next}`);
+}
+
+/**
+ * Verifies the active session against GET /api/v1/auth/me on the server.
+ * Ensures the token/cookie is valid, unrevoked, and belongs to an active administrator.
+ */
+async function verifyAdminSession() {
+    try {
+        const resp = await fetch('/api/v1/auth/me', {
+            method: 'GET',
+            credentials: 'same-origin',
+            headers: authHeaders(),
+        });
+        if (!resp.ok) {
+            await redirectToLogin();
+            return false;
+        }
+        const user = await resp.json();
+        if (!user || !user.is_admin || !user.is_active) {
+            await redirectToLogin();
+            return false;
+        }
+        localStorage.setItem(USER_KEY, user.username);
+        localStorage.setItem(ADMIN_KEY, 'true');
+        const userEl = document.getElementById('admin-user');
+        if (userEl) {
+            userEl.textContent = `${user.username}@admin`;
+        }
+        return true;
+    } catch (_) {
+        await redirectToLogin();
+        return false;
+    }
 }
 
 function escapeHtml(value) {
@@ -136,26 +183,33 @@ document.addEventListener('DOMContentLoaded', async () => {
         themeToggleBtn.addEventListener('click', toggleTheme);
     }
 
-    const token = getToken();
-    const isAdmin = localStorage.getItem(ADMIN_KEY) === 'true';
-
-    if (!token || !isAdmin) {
-        redirectToLogin();
+    // Strict server-side session verification before initializing map or controls
+    const isVerified = await verifyAdminSession();
+    if (!isVerified) {
         return;
-    }
-
-    const userEl = document.getElementById('admin-user');
-    if (userEl) {
-        userEl.textContent = `${localStorage.getItem(USER_KEY) || 'user'}@admin`;
     }
 
     const logoutBtn = document.getElementById('admin-logout-btn');
     if (logoutBtn) {
-        logoutBtn.addEventListener('click', () => {
-            clearSession();
-            window.location.replace('/login');
+        logoutBtn.addEventListener('click', async () => {
+            await redirectToLogin();
         });
     }
+
+    // Continuous session integrity checks (heartbeat + tab focus + cross-tab storage sync)
+    setInterval(() => {
+        verifyAdminSession();
+    }, 60000);
+
+    window.addEventListener('focus', () => {
+        verifyAdminSession();
+    });
+
+    window.addEventListener('storage', (e) => {
+        if (e.key === TOKEN_KEY && !e.newValue) {
+            redirectToLogin();
+        }
+    });
 
     try {
         const cfgResp = await fetch('/api/v1/config/map');
@@ -414,12 +468,17 @@ function updateOsmCount(count) {
 async function loadAllTopology() {
     try {
         const [nodesResp, edgesResp] = await Promise.all([
-            fetch('/api/v1/nodes', { headers: authHeaders() }),
-            fetch('/api/v1/edges', { headers: authHeaders() }),
+            fetch('/api/v1/nodes', { credentials: 'same-origin', headers: authHeaders() }),
+            fetch('/api/v1/edges', { credentials: 'same-origin', headers: authHeaders() }),
         ]);
 
-        if (nodesResp.status === 401 || nodesResp.status === 403) {
-            redirectToLogin();
+        if (
+            nodesResp.status === 401 ||
+            nodesResp.status === 403 ||
+            edgesResp.status === 401 ||
+            edgesResp.status === 403
+        ) {
+            await redirectToLogin();
             return;
         }
         if (!nodesResp.ok) {
@@ -622,6 +681,12 @@ async function handleRegisteredNodeClick(node, marker) {
 async function searchOsmInView() {
     if (!map || !osmLayerGroup) return;
 
+    // Require verified active administrator session before searching map nodes
+    const isAuthenticated = await verifyAdminSession();
+    if (!isAuthenticated) {
+        return;
+    }
+
     map.invalidateSize();
     const searchBtn = document.getElementById('osm-search-btn');
     const infraType = document.getElementById('osm-infra-type').value || 'energy';
@@ -640,15 +705,27 @@ async function searchOsmInView() {
     try {
         let candidates = [];
 
-        // 1. Query fast backend Overpass proxy endpoint
+        // 1. Query authenticated backend Overpass proxy endpoint
         const proxyUrl = `/api/v1/osm/search?type=${encodeURIComponent(infraType)}&south=${south}&west=${west}&north=${north}&east=${east}`;
-        const resp = await fetch(proxyUrl, { headers: authHeaders() });
+        const resp = await fetch(proxyUrl, {
+            credentials: 'same-origin',
+            headers: authHeaders(),
+        });
+
+        if (resp.status === 401 || resp.status === 403) {
+            await redirectToLogin();
+            return;
+        }
+
         if (resp.ok) {
             const data = await resp.json();
             candidates = Array.isArray(data.results) ? data.results : [];
+        } else {
+            const errPayload = await resp.json().catch(() => ({}));
+            throw new Error(errPayload.detail || `OSM search failed (HTTP ${resp.status})`);
         }
 
-        // 2. Fallback: Direct Overpass API query from browser if proxy returned empty
+        // 2. Fallback: Direct Overpass API query ONLY when the authenticated backend proxy succeeded with 0 results
         if (!candidates.length) {
             candidates = await queryOverpassDirectBrowser(infraType, south, west, north, east);
         }
@@ -805,6 +882,12 @@ function renderOsmCandidates(openFirstPopup = false) {
  * Task 2: One-Click Import from OSM marker into PostgreSQL via POST /api/v1/nodes.
  */
 async function importOsmCandidate(cand, marker, btnEl) {
+    // Require verified active administrator session before adding nodes to the city graph
+    const isAuthenticated = await verifyAdminSession();
+    if (!isAuthenticated) {
+        return;
+    }
+
     const autoConnectEl = document.getElementById('osm-auto-connect');
     const autoConnect = autoConnectEl ? Boolean(autoConnectEl.checked) : true;
 
@@ -816,6 +899,7 @@ async function importOsmCandidate(cand, marker, btnEl) {
     try {
         const response = await fetch('/api/v1/nodes', {
             method: 'POST',
+            credentials: 'same-origin',
             headers: authHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
                 name: cand.name,
@@ -827,7 +911,7 @@ async function importOsmCandidate(cand, marker, btnEl) {
         });
 
         if (response.status === 401 || response.status === 403) {
-            redirectToLogin();
+            await redirectToLogin();
             return;
         }
 
@@ -863,9 +947,13 @@ async function importOsmCandidate(cand, marker, btnEl) {
  * Task 2 & 3: Creates a manual dependency edge via POST /api/v1/edges.
  */
 async function createManualEdge(sourceNodeId, targetNodeId) {
+    const isAuthenticated = await verifyAdminSession();
+    if (!isAuthenticated) return;
+
     try {
         const response = await fetch('/api/v1/edges', {
             method: 'POST',
+            credentials: 'same-origin',
             headers: authHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
                 source_node_id: Number(sourceNodeId),
@@ -874,7 +962,7 @@ async function createManualEdge(sourceNodeId, targetNodeId) {
         });
 
         if (response.status === 401 || response.status === 403) {
-            redirectToLogin();
+            await redirectToLogin();
             return;
         }
 
@@ -898,14 +986,18 @@ async function createManualEdge(sourceNodeId, targetNodeId) {
  * Task 3: Deletes a dependency edge via DELETE /api/v1/edges/{id}.
  */
 async function deleteEdgeById(edgeId) {
+    const isAuthenticated = await verifyAdminSession();
+    if (!isAuthenticated) return;
+
     try {
         const response = await fetch(`/api/v1/edges/${edgeId}`, {
             method: 'DELETE',
+            credentials: 'same-origin',
             headers: authHeaders(),
         });
 
         if (response.status === 401 || response.status === 403) {
-            redirectToLogin();
+            await redirectToLogin();
             return;
         }
         if (!response.ok && response.status !== 204) {
@@ -924,6 +1016,9 @@ async function deleteEdgeById(edgeId) {
  * Deletes a registered node via DELETE /api/v1/nodes/{id}.
  */
 async function deleteNodeById(nodeId, nodeName = '') {
+    const isAuthenticated = await verifyAdminSession();
+    if (!isAuthenticated) return;
+
     if (!window.confirm(`Delete node #${nodeId} (${nodeName})? This will also remove its connected edges.`)) {
         return;
     }
@@ -931,10 +1026,11 @@ async function deleteNodeById(nodeId, nodeName = '') {
     try {
         const response = await fetch(`/api/v1/nodes/${nodeId}`, {
             method: 'DELETE',
+            credentials: 'same-origin',
             headers: authHeaders(),
         });
         if (response.status === 401 || response.status === 403) {
-            redirectToLogin();
+            await redirectToLogin();
             return;
         }
         if (!response.ok && response.status !== 204) {

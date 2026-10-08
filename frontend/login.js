@@ -39,10 +39,21 @@ applyTheme(currentTheme);
 
 function getNextUrl() {
     const params = new URLSearchParams(window.location.search);
-    return params.get('next') || '';
+    const rawNext = params.get('next') || '';
+    // Prevent open redirects; only allow internal paths starting with '/'
+    if (rawNext.startsWith('/') && !rawNext.startsWith('//')) {
+        return rawNext;
+    }
+    return '';
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+function clearLocalAuth() {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+    localStorage.removeItem(ADMIN_KEY);
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
     applyTheme(currentTheme);
 
     const themeToggleBtn = document.getElementById('theme-toggle-btn');
@@ -50,17 +61,47 @@ document.addEventListener('DOMContentLoaded', () => {
         themeToggleBtn.addEventListener('click', toggleTheme);
     }
 
-    // If already authenticated, redirect immediately
-    const existing = localStorage.getItem(TOKEN_KEY);
-    if (existing) {
-        const fallback = localStorage.getItem(ADMIN_KEY) === 'true' ? '/admin' : '/';
-        window.location.replace(getNextUrl() || fallback);
-        return;
-    }
-
     const form = document.getElementById('login-form');
     const errorEl = document.getElementById('login-error');
     const submitBtn = document.getElementById('login-submit');
+
+    function showError(message) {
+        if (!errorEl) return;
+        errorEl.textContent = `✕ ${message}`;
+        errorEl.classList.remove('hidden');
+    }
+
+    // Verify existing session token against server before redirecting
+    const existing = localStorage.getItem(TOKEN_KEY);
+    if (existing) {
+        try {
+            const verifyResp = await fetch('/api/v1/auth/me', {
+                method: 'GET',
+                credentials: 'same-origin',
+                headers: { Authorization: `Bearer ${existing}` },
+            });
+            if (verifyResp.ok) {
+                const user = await verifyResp.json();
+                localStorage.setItem(USER_KEY, user.username);
+                localStorage.setItem(ADMIN_KEY, String(Boolean(user.is_admin)));
+                const targetUrl = getNextUrl();
+                if (targetUrl.startsWith('/admin') && !user.is_admin) {
+                    clearLocalAuth();
+                    await fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+                    showError('Administrator privileges are required to access the GIS Admin Console.');
+                } else {
+                    const fallback = user.is_admin ? '/admin' : '/';
+                    window.location.replace(targetUrl || fallback);
+                    return;
+                }
+            } else {
+                clearLocalAuth();
+                await fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+            }
+        } catch (_) {
+            clearLocalAuth();
+        }
+    }
 
     form.addEventListener('submit', async (event) => {
         event.preventDefault();
@@ -81,6 +122,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const response = await fetch('/api/v1/auth/login', {
                 method: 'POST',
+                credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ username, password }),
             });
@@ -91,21 +133,27 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             const data = await response.json();
+            const targetUrl = getNextUrl();
+            if (targetUrl.startsWith('/admin') && !data.is_admin) {
+                await fetch('/api/v1/auth/logout', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { Authorization: `Bearer ${data.access_token}` },
+                }).catch(() => {});
+                clearLocalAuth();
+                throw new Error('Administrator privileges are required to access the GIS Admin Console.');
+            }
+
             localStorage.setItem(TOKEN_KEY, data.access_token);
             localStorage.setItem(USER_KEY, data.username);
             localStorage.setItem(ADMIN_KEY, String(Boolean(data.is_admin)));
 
             const fallback = data.is_admin ? '/admin' : '/';
-            window.location.replace(getNextUrl() || fallback);
+            window.location.replace(targetUrl || fallback);
         } catch (err) {
             showError(err.message || 'Authentication failed.');
             submitBtn.disabled = false;
             submitBtn.textContent = 'Authenticate';
         }
     });
-
-    function showError(message) {
-        errorEl.textContent = `✕ ${message}`;
-        errorEl.classList.remove('hidden');
-    }
 });

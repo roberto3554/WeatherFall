@@ -23,10 +23,8 @@ const AUTH_TOKEN_KEY = 'weatherfall_token';
 const AUTH_USER_KEY = 'weatherfall_username';
 const AUTH_ADMIN_KEY = 'weatherfall_is_admin';
 
-function updateAuthBar() {
+async function updateAuthBar() {
     const token = localStorage.getItem(AUTH_TOKEN_KEY);
-    const username = localStorage.getItem(AUTH_USER_KEY) || 'guest';
-    const isAdmin = localStorage.getItem(AUTH_ADMIN_KEY) === 'true';
 
     const userEl = document.getElementById('auth-user');
     const adminLink = document.getElementById('auth-admin-link');
@@ -35,12 +33,36 @@ function updateAuthBar() {
 
     if (!userEl || !adminLink || !loginLink || !logoutBtn) return;
 
-    if (token) {
-        userEl.textContent = `${username}${isAdmin ? ' (Admin)' : ''}`;
+    if (!token) {
+        userEl.textContent = 'Guest Operator';
+        adminLink.classList.add('hidden');
+        loginLink.classList.remove('hidden');
+        logoutBtn.classList.add('hidden');
+        return;
+    }
+
+    try {
+        const resp = await fetch('/api/v1/auth/me', {
+            method: 'GET',
+            credentials: 'same-origin',
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!resp.ok) {
+            throw new Error('Invalid session');
+        }
+        const user = await resp.json();
+        const isAdmin = Boolean(user.is_admin && user.is_active);
+        localStorage.setItem(AUTH_USER_KEY, user.username);
+        localStorage.setItem(AUTH_ADMIN_KEY, String(isAdmin));
+
+        userEl.textContent = `${user.username}${isAdmin ? ' (Admin)' : ''}`;
         adminLink.classList.toggle('hidden', !isAdmin);
         loginLink.classList.add('hidden');
         logoutBtn.classList.remove('hidden');
-    } else {
+    } catch (_) {
+        localStorage.removeItem(AUTH_TOKEN_KEY);
+        localStorage.removeItem(AUTH_USER_KEY);
+        localStorage.removeItem(AUTH_ADMIN_KEY);
         userEl.textContent = 'Guest Operator';
         adminLink.classList.add('hidden');
         loginLink.classList.remove('hidden');
@@ -48,12 +70,22 @@ function updateAuthBar() {
     }
 }
 
-function handleLogout() {
+async function handleLogout() {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
     localStorage.removeItem(AUTH_TOKEN_KEY);
     localStorage.removeItem(AUTH_USER_KEY);
     localStorage.removeItem(AUTH_ADMIN_KEY);
-    updateAuthBar();
-    appendSystemCard('Operator Session Ended', 'You have signed out of the operator session.');
+    try {
+        await fetch('/api/v1/auth/logout', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+    } catch (_) {
+        // Ignore network errors during logout
+    }
+    await updateAuthBar();
+    appendSystemCard('Operator Session Ended', 'You have signed out and your session token has been revoked.');
 }
 // ── /AUTH ──
 
