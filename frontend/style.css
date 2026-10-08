@@ -3014,3 +3014,479 @@ body[data-warroom-state="critical"] .brand-badge {
     background: rgba(241, 245, 249, 0.95);
     border-color: rgba(100, 116, 139, 0.3);
 }
+
+/* ==========================================================================
+   TOPOLOGICAL INTEGRITY VALIDATOR — DIAGNOSTICS BUTTON, TOAST & REPORT MODAL
+   ========================================================================== */
+
+.diagnostics-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    padding: 0.44rem 0.78rem;
+    font-size: 0.76rem;
+    font-weight: 600;
+    border-radius: 7px;
+    border: 1px solid rgba(56, 189, 248, 0.38);
+    background: rgba(15, 23, 42, 0.85);
+    color: #e0f2fe;
+    cursor: pointer;
+    transition: all 0.18s ease;
+    white-space: nowrap;
+}
+
+.diagnostics-btn:hover:not(:disabled) {
+    background: rgba(14, 165, 233, 0.18);
+    border-color: #38bdf8;
+    color: #ffffff;
+    box-shadow: 0 0 12px rgba(56, 189, 248, 0.22);
+}
+
+.diagnostics-btn:disabled {
+    opacity: 0.65;
+    cursor: wait;
+}
+
+.diagnostics-btn.diag-btn-valid {
+    border-color: rgba(16, 185, 129, 0.45);
+}
+
+.diagnostics-btn.diag-btn-warning {
+    border-color: rgba(234, 179, 8, 0.55);
+}
+
+.diagnostics-btn.diag-btn-critical {
+    border-color: rgba(239, 68, 68, 0.72);
+    background: rgba(127, 29, 29, 0.25);
+    color: #fecaca;
+}
+
+.diagnostics-sidebar-btn {
+    width: 100%;
+    margin-bottom: 0.48rem;
+    padding: 0.52rem 0.75rem;
+}
+
+.diagnostics-status-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.08rem 0.42rem;
+    border-radius: 999px;
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+
+.diagnostics-status-pill.pill-valid {
+    background: rgba(16, 185, 129, 0.2);
+    color: #34d399;
+    border: 1px solid rgba(16, 185, 129, 0.45);
+}
+
+.diagnostics-status-pill.pill-warning {
+    background: rgba(234, 179, 8, 0.22);
+    color: #fde047;
+    border: 1px solid rgba(250, 204, 21, 0.5);
+}
+
+.diagnostics-status-pill.pill-critical {
+    background: rgba(239, 68, 68, 0.28);
+    color: #fca5a5;
+    border: 1px solid rgba(239, 68, 68, 0.6);
+}
+
+.admin-sim-failsafe-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.24rem 0.62rem;
+    font-size: 0.71rem;
+    font-weight: 700;
+    color: #fecaca;
+    background: rgba(185, 28, 28, 0.32);
+    border: 1px solid rgba(239, 68, 68, 0.65);
+    border-radius: 999px;
+    letter-spacing: 0.02em;
+}
+
+/* Green 'Topology Valid - System Go' Toast */
+.topology-toast {
+    position: fixed;
+    top: 1.15rem;
+    right: 1.25rem;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.72rem 1.1rem;
+    border-radius: 10px;
+    font-size: 0.84rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    box-shadow: 0 14px 32px rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(12px);
+    animation: toastSlideIn 0.22s ease-out;
+}
+
+.topology-toast-success {
+    background: rgba(6, 78, 59, 0.94);
+    border: 1.5px solid #10b981;
+    color: #ecfdf5;
+}
+
+.topology-toast-error {
+    background: rgba(127, 29, 29, 0.94);
+    border: 1.5px solid #ef4444;
+    color: #fef2f2;
+}
+
+.topology-toast-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: rgba(16, 185, 129, 0.28);
+    color: #34d399;
+    font-size: 0.82rem;
+    font-weight: 800;
+}
+
+@keyframes toastSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Diagnostic Report Modal */
+.diagnostic-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 9990;
+    background: rgba(2, 6, 23, 0.76);
+    backdrop-filter: blur(6px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.25rem;
+}
+
+.diagnostic-modal {
+    width: 100%;
+    max-width: 780px;
+    max-height: 86vh;
+    display: flex;
+    flex-direction: column;
+    background: #0f172a;
+    border: 1px solid rgba(148, 163, 184, 0.26);
+    border-radius: 14px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.65);
+    overflow: hidden;
+    color: #f8fafc;
+}
+
+.diagnostic-modal-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1.1rem 1.35rem;
+    background: rgba(15, 23, 42, 0.95);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.diagnostic-modal-title-group h2 {
+    margin: 0;
+    font-size: 1.02rem;
+    font-weight: 700;
+    color: #f8fafc;
+}
+
+.diagnostic-modal-subtitle {
+    margin: 0.22rem 0 0;
+    font-size: 0.75rem;
+    color: #94a3b8;
+}
+
+.diagnostic-modal-summary {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex-shrink: 0;
+}
+
+.diagnostic-modal-close {
+    background: transparent;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    color: #cbd5e1;
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    font-size: 1.15rem;
+    line-height: 1;
+    cursor: pointer;
+    margin-left: 0.25rem;
+}
+
+.diagnostic-modal-close:hover {
+    background: rgba(239, 68, 68, 0.18);
+    border-color: #ef4444;
+    color: #ffffff;
+}
+
+/* Red ('critical') and Yellow ('warning') Badges */
+.diag-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.16rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.diag-badge-critical {
+    background: rgba(239, 68, 68, 0.24);
+    color: #fca5a5;
+    border: 1px solid #ef4444;
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.22);
+}
+
+.diag-badge-warning {
+    background: rgba(234, 179, 8, 0.22);
+    color: #fde047;
+    border: 1px solid #eab308;
+    box-shadow: 0 0 10px rgba(234, 179, 8, 0.18);
+}
+
+.diag-inline-critical {
+    color: #fca5a5;
+    font-weight: 800;
+}
+
+.diagnostic-failsafe-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.78rem 1.35rem;
+    background: linear-gradient(90deg, rgba(185, 28, 28, 0.32) 0%, rgba(127, 29, 29, 0.18) 100%);
+    border-bottom: 1px solid rgba(239, 68, 68, 0.45);
+    font-size: 0.78rem;
+    line-height: 1.42;
+    color: #fee2e2;
+}
+
+.diagnostic-failsafe-icon {
+    font-size: 1.15rem;
+    flex-shrink: 0;
+}
+
+.diagnostic-modal-body {
+    padding: 1rem 1.35rem;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.diagnostic-issues-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+}
+
+.diag-issue-card {
+    padding: 0.78rem 0.95rem;
+    border-radius: 9px;
+    background: rgba(30, 41, 59, 0.72);
+    border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.diag-card-critical {
+    border-left: 4px solid #ef4444;
+    background: linear-gradient(90deg, rgba(239, 68, 68, 0.12) 0%, rgba(30, 41, 59, 0.78) 100%);
+}
+
+.diag-card-warning {
+    border-left: 4px solid #eab308;
+    background: linear-gradient(90deg, rgba(234, 179, 8, 0.11) 0%, rgba(30, 41, 59, 0.78) 100%);
+}
+
+.diag-issue-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.42rem;
+}
+
+.diag-issue-badges {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+}
+
+.diag-category-tag {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #cbd5e1;
+    background: rgba(15, 23, 42, 0.65);
+    border: 1px solid rgba(148, 163, 184, 0.24);
+    padding: 0.12rem 0.48rem;
+    border-radius: 5px;
+}
+
+.diag-node-chip {
+    font-size: 0.76rem;
+    font-weight: 700;
+    color: #38bdf8;
+    font-family: var(--font-mono);
+}
+
+.diag-locate-btn {
+    padding: 0.2rem 0.55rem;
+    font-size: 0.69rem;
+    font-weight: 600;
+    border-radius: 5px;
+    border: 1px solid rgba(56, 189, 248, 0.4);
+    background: rgba(14, 165, 233, 0.14);
+    color: #7dd3fc;
+    cursor: pointer;
+}
+
+.diag-locate-btn:hover {
+    background: rgba(14, 165, 233, 0.28);
+    color: #ffffff;
+}
+
+.diag-issue-message {
+    margin: 0;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    color: #e2e8f0;
+}
+
+.diagnostic-modal-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.8rem;
+    padding: 0.85rem 1.35rem;
+    background: rgba(15, 23, 42, 0.95);
+    border-top: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.diagnostic-timestamp {
+    font-size: 0.72rem;
+    color: #94a3b8;
+}
+
+.diagnostic-modal-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+}
+
+/* Command Center Sidebar Inline Failsafe & Locked Start Simulation Button */
+.topology-failsafe-inline {
+    padding: 0.65rem 0.75rem;
+    margin-bottom: 0.55rem;
+    border-radius: 8px;
+    background: rgba(127, 29, 29, 0.28);
+    border: 1px solid rgba(239, 68, 68, 0.62);
+    color: #fee2e2;
+    font-size: 0.72rem;
+    line-height: 1.38;
+}
+
+.topology-failsafe-inline-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.4rem;
+    margin-bottom: 0.32rem;
+    font-weight: 700;
+}
+
+.topology-failsafe-inline p {
+    margin: 0 0 0.4rem;
+    color: #fecaca;
+}
+
+.diagnostics-inline-link {
+    background: rgba(239, 68, 68, 0.24);
+    border: 1px solid rgba(248, 113, 113, 0.6);
+    color: #ffffff;
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 0.22rem 0.55rem;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.diagnostics-inline-link:hover {
+    background: rgba(239, 68, 68, 0.42);
+}
+
+.run-button.run-button-locked,
+.run-button.run-button-locked:disabled {
+    background: linear-gradient(135deg, #7f1d1d 0%, #450a0a 100%) !important;
+    border: 1px solid rgba(239, 68, 68, 0.65) !important;
+    color: #fca5a5 !important;
+    opacity: 0.85 !important;
+    cursor: not-allowed !important;
+    box-shadow: none !important;
+}
+
+[data-theme="light"] .diagnostics-btn {
+    background: #f8fafc;
+    color: #0f172a;
+    border-color: rgba(2, 132, 199, 0.4);
+}
+
+[data-theme="light"] .diagnostic-modal {
+    background: #ffffff;
+    color: #0f172a;
+    border-color: rgba(15, 23, 42, 0.16);
+}
+
+[data-theme="light"] .diagnostic-modal-header,
+[data-theme="light"] .diagnostic-modal-footer {
+    background: #f8fafc;
+    border-color: rgba(15, 23, 42, 0.1);
+}
+
+[data-theme="light"] .diagnostic-modal-title-group h2 {
+    color: #0f172a;
+}
+
+[data-theme="light"] .diag-issue-card {
+    background: #f8fafc;
+    border-color: rgba(15, 23, 42, 0.12);
+}
+
+[data-theme="light"] .diag-issue-message {
+    color: #1e293b;
+}
+
+[data-theme="light"] .diag-badge-critical {
+    background: rgba(239, 68, 68, 0.15);
+    color: #b91c1c;
+    border-color: #dc2626;
+}
+
+[data-theme="light"] .diag-badge-warning {
+    background: rgba(234, 179, 8, 0.18);
+    color: #a16207;
+    border-color: #ca8a04;
+}

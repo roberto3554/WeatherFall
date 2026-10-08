@@ -1073,6 +1073,23 @@ async function pollSimulationTask(taskId, pollIntervalMs = 2000, maxAttempts = 1
 async function runSimulation() {
     if (isSimulating) return;
 
+    // Failsafe check against live Topological Integrity Validator before dispatching simulation
+    const issues = await validateCommandTopology({ silent: true });
+    const criticalIssues = issues.filter((i) => i.level === 'critical');
+    if (criticalIssues.length > 0 || isTopologyCriticalLocked) {
+        openCommandDiagnosticModal(issues);
+        appendFeedCard({
+            variant: 'fail',
+            iconSvg: FEED_SVGS.fail,
+            iconClass: 'fail-icon',
+            title: 'Simulation Blocked — Critical Topology Error',
+            pillText: `${criticalIssues.length} Critical`,
+            pillClass: 'pill-fail',
+            description: `Failsafe engaged: ${criticalIssues[0]?.message || 'Circular dependencies or lifeline orphans detected.'} Resolve critical errors in the Admin Console before starting a simulation.`
+        });
+        return;
+    }
+
     const disasterSelect = document.getElementById('disaster-type');
     const magnitudeInput = document.getElementById('disaster-magnitude');
     const trajectoryInput = document.getElementById('disaster-trajectory');
@@ -1182,7 +1199,7 @@ async function runSimulation() {
         });
     } finally {
         isSimulating = false;
-        if (runBtn) runBtn.disabled = false;
+        if (runBtn) runBtn.disabled = Boolean(isTopologyCriticalLocked);
         if (resetBtn) resetBtn.disabled = false;
     }
 }
@@ -1350,7 +1367,10 @@ async function animateExecutionTrace(trace) {
                 crews: step.remaining_crews
             });
 
-            const critDesc = `[${clockStr}] Upstream lifeline from ${step.parent_node || 'Epicenter'} severed. Entered CRITICAL_BATTERY (${backupHrs}h UPS reserve; deadline ${deadlineStr}). ${step.reasoning || ''}`.trim();
+            const critRemStr = (step.remaining_budget !== undefined && step.remaining_crews !== undefined)
+                ? ` [Remaining Budget: $${Math.round(Number(step.remaining_budget)).toLocaleString()} | Crews Left: ${step.remaining_crews}]`
+                : '';
+            const critDesc = `[${clockStr}] Upstream lifeline from ${step.parent_node || 'Epicenter'} severed. Entered CRITICAL_BATTERY (${backupHrs}h UPS reserve; deadline ${deadlineStr}). ${step.reasoning || ''}${critRemStr}`.trim();
 
             appendFeedCard({
                 variant: 'warning',
@@ -1370,7 +1390,7 @@ async function animateExecutionTrace(trace) {
             continue;
         }
 
-        // 3. RECOVERY_COMPLETED EVENT (Field crew finishes before battery_deadline -> ONLINE)
+        // 3. RECOVERY_COMPLETED EVENT (Field crew finishes before battery_deadline -> ONLINE & Crew released)
         const hasRecoveryEdge = Boolean(step.new_edge && step.new_edge.source && step.new_edge.target);
         if (step.step === 'recovery_completed' || evType === 'RECOVERY_COMPLETED' || (step.status && hasRecoveryEdge)) {
             criticalBatteryNodesSet.delete(nodeId);
@@ -1441,14 +1461,18 @@ async function animateExecutionTrace(trace) {
                 crews: step.remaining_crews
             });
 
-            const remStateStr = (step.remaining_budget !== undefined && step.remaining_crews !== undefined)
-                ? ` • Remaining: $${Math.round(Number(step.remaining_budget)).toLocaleString()} & ${step.remaining_crews} crew(s)`
+            const crewReleaseText = (step.remaining_budget !== undefined && step.remaining_crews !== undefined)
+                ? `Crew released. Remaining Budget: $${Math.round(Number(step.remaining_budget)).toLocaleString()} | Crews Left: ${step.remaining_crews}`
                 : '';
+            const rawReasoning = String(step.reasoning || '').trim();
+            const reasoningWithRelease = (crewReleaseText && !rawReasoning.includes('Crew released.'))
+                ? `${rawReasoning} ${crewReleaseText}`.trim()
+                : rawReasoning;
             const metricsSuffix = (estCost !== undefined && estCost !== null)
-                ? ` (Cost: $${Number(estCost).toLocaleString()} • Crews: ${crewsUsed} • Field Time: ${recTimeDisplay}${remStateStr})`
+                ? ` (Cost: $${Number(estCost).toLocaleString()} • Crews Used: ${crewsUsed} • Field Time: ${recTimeDisplay})`
                 : '';
             const routeText = hasRecoveryEdge ? `${step.new_edge.source} → ${step.new_edge.target}` : nodeName;
-            const rerouteSummary = `[${clockStr}] RECOVERY_COMPLETED before battery deadline: Rerouted ${routeText}.${metricsSuffix} ${step.reasoning || ''}`.trim();
+            const rerouteSummary = `[${clockStr}] RECOVERY_COMPLETED before battery deadline: Rerouted ${routeText}.${metricsSuffix} ${reasoningWithRelease}`.trim();
 
             appendFeedCard({
                 variant: 'recovery',
@@ -2540,4 +2564,280 @@ document.addEventListener('DOMContentLoaded', () => {
             setTrajectoryInput(traj);
         });
     }
+
+    // Topological Integrity Validator & Cross-App Failsafe Lock
+    const runDiagBtn = document.getElementById('run-diagnostics-btn');
+    if (runDiagBtn) {
+        runDiagBtn.addEventListener('click', () => {
+            validateCommandTopology({ silent: false });
+        });
+    }
+
+    const openDiagModalBtn = document.getElementById('open-diagnostics-modal-btn');
+    if (openDiagModalBtn) {
+        openDiagModalBtn.addEventListener('click', () => {
+            openCommandDiagnosticModal(latestDiagnosticIssues);
+        });
+    }
+
+    const rerunDiagBtn = document.getElementById('diagnostic-rerun-btn');
+    if (rerunDiagBtn) {
+        rerunDiagBtn.addEventListener('click', () => {
+            validateCommandTopology({ silent: false });
+        });
+    }
+
+    const closeDiagBtn = document.getElementById('diagnostic-modal-close');
+    if (closeDiagBtn) {
+        closeDiagBtn.addEventListener('click', closeCommandDiagnosticModal);
+    }
+
+    const dismissDiagBtn = document.getElementById('diagnostic-dismiss-btn');
+    if (dismissDiagBtn) {
+        dismissDiagBtn.addEventListener('click', closeCommandDiagnosticModal);
+    }
+
+    const diagBackdrop = document.getElementById('diagnostic-modal-backdrop');
+    if (diagBackdrop) {
+        diagBackdrop.addEventListener('click', (e) => {
+            if (e.target === diagBackdrop) {
+                closeCommandDiagnosticModal();
+            }
+        });
+    }
+
+    // Perform initial background validation to enforce failsafe on load
+    validateCommandTopology({ silent: true });
+
+    // Re-validate when returning to this tab or when Admin tab broadcasts a lock change
+    window.addEventListener('focus', () => {
+        validateCommandTopology({ silent: true });
+    });
+    window.addEventListener('storage', (e) => {
+        if (e.key === 'weatherfall_topology_critical_lock') {
+            validateCommandTopology({ silent: true });
+        }
+    });
 });
+
+let isTopologyCriticalLocked = false;
+let latestDiagnosticIssues = [];
+let commandToastTimer = null;
+
+function showCommandTopologyToast(message = 'Topology Valid - System Go', variant = 'success') {
+    const toastEl = document.getElementById('topology-toast');
+    const textEl = document.getElementById('topology-toast-text');
+    const iconEl = document.getElementById('topology-toast-icon');
+    if (!toastEl || !textEl) return;
+
+    textEl.textContent = message;
+    if (iconEl) {
+        iconEl.textContent = variant === 'error' ? '✕' : '✓';
+    }
+    toastEl.className = `topology-toast topology-toast-${variant}`;
+    toastEl.classList.remove('hidden');
+
+    if (commandToastTimer) {
+        clearTimeout(commandToastTimer);
+    }
+    commandToastTimer = setTimeout(() => {
+        toastEl.classList.add('hidden');
+    }, 4200);
+}
+
+/**
+ * Enforces the Task 3 Failsafe:
+ * If any 'critical' errors exist, strictly disables the 'Start Simulation' (#run-btn)
+ * button across the app to prevent the simulation loop and Celery workers from
+ * encountering an infinite loop or null reference.
+ */
+function applyCommandFailsafeLock(issues) {
+    latestDiagnosticIssues = Array.isArray(issues) ? issues : [];
+    const criticalIssues = latestDiagnosticIssues.filter((i) => i.level === 'critical');
+    const warningIssues = latestDiagnosticIssues.filter((i) => i.level === 'warning');
+    isTopologyCriticalLocked = criticalIssues.length > 0;
+
+    localStorage.setItem('weatherfall_topology_critical_lock', isTopologyCriticalLocked ? 'true' : 'false');
+
+    const runBtn = document.getElementById('run-btn');
+    const runBtnSpan = runBtn ? runBtn.querySelector('span') : null;
+    const failsafeBanner = document.getElementById('topology-failsafe-banner');
+    const failsafeCount = document.getElementById('topology-failsafe-count');
+    const pillEl = document.getElementById('diagnostics-status-pill');
+    const diagBtn = document.getElementById('run-diagnostics-btn');
+
+    if (runBtn) {
+        if (isTopologyCriticalLocked) {
+            runBtn.disabled = true;
+            runBtn.classList.add('run-button-locked');
+            runBtn.title = `Start Simulation Disabled — ${criticalIssues.length} critical topological error(s) detected`;
+            if (runBtnSpan) {
+                runBtnSpan.textContent = 'Start Simulation Locked';
+            }
+        } else {
+            if (!isSimulating) {
+                runBtn.disabled = false;
+            }
+            runBtn.classList.remove('run-button-locked');
+            runBtn.title = 'Start Simulation';
+            if (runBtnSpan) {
+                runBtnSpan.textContent = 'Start Simulation';
+            }
+        }
+    }
+
+    if (failsafeBanner) {
+        failsafeBanner.classList.toggle('hidden', !isTopologyCriticalLocked);
+        if (failsafeCount && isTopologyCriticalLocked) {
+            failsafeCount.textContent = `${criticalIssues.length} Critical Error${criticalIssues.length === 1 ? '' : 's'}`;
+        }
+    }
+
+    if (pillEl && diagBtn) {
+        diagBtn.classList.remove('diag-btn-valid', 'diag-btn-warning', 'diag-btn-critical');
+        if (criticalIssues.length > 0) {
+            pillEl.textContent = `${criticalIssues.length} Critical`;
+            pillEl.className = 'diagnostics-status-pill pill-critical';
+            diagBtn.classList.add('diag-btn-critical');
+        } else if (warningIssues.length > 0) {
+            pillEl.textContent = `${warningIssues.length} Warning${warningIssues.length > 1 ? 's' : ''}`;
+            pillEl.className = 'diagnostics-status-pill pill-warning';
+            diagBtn.classList.add('diag-btn-warning');
+        } else {
+            pillEl.textContent = 'System Go';
+            pillEl.className = 'diagnostics-status-pill pill-valid';
+            diagBtn.classList.add('diag-btn-valid');
+        }
+    }
+}
+
+async function validateCommandTopology({ silent = false } = {}) {
+    const diagBtn = document.getElementById('run-diagnostics-btn');
+    const labelEl = document.getElementById('run-diagnostics-label');
+
+    if (!silent && diagBtn && labelEl) {
+        diagBtn.disabled = true;
+        labelEl.textContent = 'Validating Graph…';
+    }
+
+    try {
+        const resp = await fetch('/api/v1/topology/validate');
+        if (!resp.ok) {
+            throw new Error(`HTTP ${resp.status}`);
+        }
+        const issues = await resp.json();
+        const normalized = Array.isArray(issues) ? issues : [];
+        applyCommandFailsafeLock(normalized);
+
+        if (!silent) {
+            if (normalized.length === 0) {
+                closeCommandDiagnosticModal();
+                showCommandTopologyToast('Topology Valid - System Go', 'success');
+                appendSystemCard(
+                    'Topology Valid - System Go',
+                    'NetworkX Topological Integrity Validator confirmed 0 circular dependencies, 0 lifeline orphans, and 0 supplier bottlenecks.'
+                );
+            } else {
+                openCommandDiagnosticModal(normalized);
+            }
+        }
+        return normalized;
+    } catch (err) {
+        if (!silent) {
+            showCommandTopologyToast(`Diagnostics Error: ${err.message}`, 'error');
+        }
+        return latestDiagnosticIssues;
+    } finally {
+        if (!silent && diagBtn && labelEl) {
+            diagBtn.disabled = false;
+            labelEl.textContent = 'Run Network Diagnostics';
+        }
+    }
+}
+
+function openCommandDiagnosticModal(issues) {
+    const backdrop = document.getElementById('diagnostic-modal-backdrop');
+    const listEl = document.getElementById('diagnostic-issues-list');
+    const critBadge = document.getElementById('diag-summary-critical');
+    const warnBadge = document.getElementById('diag-summary-warning');
+    const failsafeBanner = document.getElementById('diagnostic-failsafe-banner');
+    const timestampEl = document.getElementById('diagnostic-timestamp');
+
+    if (!backdrop || !listEl) return;
+
+    const safeIssues = Array.isArray(issues) ? issues : [];
+    const criticalIssues = safeIssues.filter((i) => i.level === 'critical');
+    const warningIssues = safeIssues.filter((i) => i.level === 'warning');
+
+    if (critBadge) {
+        critBadge.textContent = `${criticalIssues.length} Critical`;
+    }
+    if (warnBadge) {
+        warnBadge.textContent = `${warningIssues.length} Warning${warningIssues.length === 1 ? '' : 's'}`;
+    }
+    if (failsafeBanner) {
+        failsafeBanner.classList.toggle('hidden', criticalIssues.length === 0);
+    }
+    if (timestampEl) {
+        timestampEl.textContent = `Diagnostic scan completed at ${new Date().toLocaleTimeString()} · ${safeIssues.length} issue(s) detected`;
+    }
+
+    listEl.innerHTML = safeIssues
+        .map((issue) => {
+            const isCritical = issue.level === 'critical';
+            const badgeClass = isCritical ? 'diag-badge-critical' : 'diag-badge-warning';
+            const cardClass = isCritical ? 'diag-issue-card diag-card-critical' : 'diag-issue-card diag-card-warning';
+            const badgeText = isCritical ? 'CRITICAL' : 'WARNING';
+
+            const msgText = String(issue.message || '');
+            let categoryLabel = isCritical ? 'Topological Error' : 'Capacity Bottleneck';
+            if (msgText.toLowerCase().includes('cycle') || msgText.toLowerCase().includes('deadlock')) {
+                categoryLabel = 'Cycle Deadlock';
+            } else if (msgText.toLowerCase().includes('orphan')) {
+                categoryLabel = 'Lifeline Orphan';
+            }
+
+            const matchingNode = topologyNodes.find(
+                (n) => String(n.name) === String(issue.node_id) || String(n.id) === String(issue.node_id)
+            );
+
+            return `
+                <div class="${cardClass}">
+                    <div class="diag-issue-header">
+                        <div class="diag-issue-badges">
+                            <span class="diag-badge ${badgeClass}">${badgeText}</span>
+                            <span class="diag-category-tag">${escapeHtml(categoryLabel)}</span>
+                            <span class="diag-node-chip">${escapeHtml(issue.node_id)}</span>
+                        </div>
+                        ${
+                            matchingNode
+                                ? `<button type="button" class="diag-locate-btn" data-node-id="${escapeHtml(matchingNode.id)}" title="Pan map to ${escapeHtml(matchingNode.name)}">Locate on Map</button>`
+                                : ''
+                        }
+                    </div>
+                    <p class="diag-issue-message">${escapeHtml(issue.message)}</p>
+                </div>
+            `;
+        })
+        .join('');
+
+    listEl.querySelectorAll('.diag-locate-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const nodeId = btn.dataset.nodeId;
+            const node = topologyNodes.find((n) => String(n.id) === String(nodeId));
+            if (node && leafletMap) {
+                closeCommandDiagnosticModal();
+                leafletMap.flyTo([node.lat, node.lon], 15, { duration: 0.65 });
+            }
+        });
+    });
+
+    backdrop.classList.remove('hidden');
+}
+
+function closeCommandDiagnosticModal() {
+    const backdrop = document.getElementById('diagnostic-modal-backdrop');
+    if (backdrop) {
+        backdrop.classList.add('hidden');
+    }
+}
