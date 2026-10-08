@@ -252,10 +252,50 @@ class NewEdge(BaseModel):
     )
 
 
+class AgentDebateEntry(BaseModel):
+    """Single agent proposal or Supervisor verdict in the Multi-Agent Crisis Committee deliberation."""
+
+    model_config = ConfigDict(extra="allow")
+
+    agent: str = Field(
+        ...,
+        examples=["Engineering_Agent", "Social_Agent", "Finance_Agent", "Supervisor_Agent"],
+        description="Crisis Committee agent persona identifier.",
+    )
+    role: Optional[str] = Field(
+        default=None,
+        description="Human-readable crisis committee role of the agent.",
+    )
+    node_id: Optional[str] = Field(
+        default=None,
+        description="Identifier of the failing node evaluated by this agent.",
+    )
+    status: bool = Field(
+        default=True,
+        description="Whether this agent recommends dispatching a recovery route (true) or deferring/abandoning (false).",
+    )
+    cost: Optional[int] = Field(
+        default=None,
+        description="Estimated emergency recovery cost in USD for the proposed route.",
+    )
+    new_edge: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Proposed recovery route ({'source': ..., 'target': ..., 'cost': ..., 'crews_used': ...}).",
+    )
+    proposal: str = Field(
+        ...,
+        description="The agent's proposal rationale or Supervisor_Agent's 20-word negotiation summary.",
+    )
+    negotiation_summary: Optional[str] = Field(
+        default=None,
+        description="Concise (~20-word) summary of the committee negotiation (populated on Supervisor_Agent).",
+    )
+
+
 class NodeState(BaseModel):
     """Evaluated state of a single infrastructure node in the Discrete Event Simulation (DES) trace."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="allow")
 
     step: Optional[str] = Field(
         default="cascade",
@@ -329,6 +369,13 @@ class NodeState(BaseModel):
     crew_release_notice: Optional[str] = Field(
         default=None,
         description="Explicit notice when a repair crew is released back to the pool upon RECOVERY_COMPLETED.",
+    )
+    agent_debate_log: Optional[list[AgentDebateEntry] | list[dict[str, Any]] | dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Multi-Agent Crisis Committee deliberation log containing recovery proposals from "
+            "Engineering_Agent, Social_Agent, and Finance_Agent, plus the Supervisor_Agent negotiation summary."
+        ),
     )
     new_edge: Optional[NewEdge] = Field(default=None)
 

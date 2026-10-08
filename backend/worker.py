@@ -560,6 +560,7 @@ async def execute_simulation_cascade(
                 "recovery_time_ms": None,
                 "remaining_budget": round(remaining_budget, 2),
                 "remaining_crews": remaining_crews,
+                "agent_debate_log": [],
                 "new_edge": None,
             }
         ]
@@ -651,6 +652,7 @@ async def execute_simulation_cascade(
                         "battery_backup_hours": battery_hours,
                         "battery_deadline": battery_deadline,
                         "abandon_reasoning": "",
+                        "agent_debate_log": [],
                     }
                     battery_depletion_meta[child_name] = depletion_meta
                     _push_des_event(
@@ -771,15 +773,36 @@ async def execute_simulation_cascade(
                             decisions_by_node[child_name] = decision
                             want_save = bool(decision.get("status", False))
                     elif slot_time is None and want_save:
+                        prev_debate = decision.get("agent_debate_log") if isinstance(decision.get("agent_debate_log"), list) else []
+                        exhausted_summary = (
+                            f"Upheld Finance crew cap on {child_name}: all repair crews and release slots "
+                            f"reserved for higher-SVI facilities."
+                        )
+                        updated_debate = [e for e in prev_debate if isinstance(e, dict) and e.get("agent") != "Supervisor_Agent"]
+                        updated_debate.append(
+                            {
+                                "agent": "Supervisor_Agent",
+                                "role": "Crisis Committee Chair (Binding Decision)",
+                                "node_id": child_name,
+                                "status": False,
+                                "cost": 0,
+                                "new_edge": None,
+                                "proposal": exhausted_summary,
+                                "negotiation_summary": exhausted_summary,
+                            }
+                        )
                         want_save = False
                         decision = {
                             "node_id": child_name,
                             "status": False,
                             "reasoning": (
+                                f'[Committee Verdict: "{exhausted_summary}"] '
                                 f"Abandoned (Resource Exhausted at T+{current_T:.2f}h): 0 immediate repair crews "
                                 f"available and all upcoming crew release slots are already reserved for "
                                 f"higher-priority facilities."
                             ),
+                            "negotiation_summary": exhausted_summary,
+                            "agent_debate_log": updated_debate,
                             "recovery_command": None,
                             "new_edge": None,
                         }
@@ -791,6 +814,11 @@ async def execute_simulation_cascade(
                 )
                 recovery_command: str | None = decision.get("recovery_command")
                 raw_new_edge = decision.get("new_edge")
+                agent_debate_log: list[dict[str, Any]] = (
+                    list(decision.get("agent_debate_log"))
+                    if isinstance(decision.get("agent_debate_log"), list)
+                    else []
+                )
 
                 scheduled_recovery = False
                 scheduled_eta_T: float | None = None
@@ -935,6 +963,7 @@ async def execute_simulation_cascade(
                                     "recovery_time_ms": rec_time,
                                     "reasoning": reasoning,
                                     "recovery_command": recovery_command,
+                                    "agent_debate_log": agent_debate_log,
                                     "reserved_crews": 0,
                                     "handoff_crews": 0,
                                 },
@@ -1002,13 +1031,16 @@ async def execute_simulation_cascade(
                                         "recovery_time_ms": rec_time,
                                         "reasoning": reasoning,
                                         "recovery_command": recovery_command,
+                                        "agent_debate_log": agent_debate_log,
                                         "reserved_crews": 0,
                                         "handoff_crews": 0,
                                     },
                                 )
 
-                if not scheduled_recovery and child_name in battery_depletion_meta:
-                    battery_depletion_meta[child_name]["abandon_reasoning"] = reasoning
+                if child_name in battery_depletion_meta:
+                    battery_depletion_meta[child_name]["agent_debate_log"] = agent_debate_log
+                    if not scheduled_recovery:
+                        battery_depletion_meta[child_name]["abandon_reasoning"] = reasoning
 
                 crit_desc = (
                     f"CRITICAL_BATTERY at T+{current_T:.2f}h: Lost {missing_dependency_type} lifeline from {parent_name} "
@@ -1046,6 +1078,7 @@ async def execute_simulation_cascade(
                         "recovery_time_ms": None,
                         "remaining_budget": round(remaining_budget, 2),
                         "remaining_crews": remaining_crews,
+                        "agent_debate_log": agent_debate_log,
                         "new_edge": None,
                     }
                 )
@@ -1106,6 +1139,7 @@ async def execute_simulation_cascade(
                         "recovery_time_ms": meta["recovery_time_ms"],
                         "remaining_budget": round(remaining_budget, 2),
                         "remaining_crews": remaining_crews,
+                        "agent_debate_log": meta.get("agent_debate_log", []),
                         "new_edge": new_edge_obj,
                     }
                 )
@@ -1165,6 +1199,7 @@ async def execute_simulation_cascade(
                             "recovery_time_ms": None,
                             "remaining_budget": round(remaining_budget, 2),
                             "remaining_crews": remaining_crews,
+                            "agent_debate_log": dep_meta.get("agent_debate_log", []),
                             "new_edge": None,
                         }
                     )
