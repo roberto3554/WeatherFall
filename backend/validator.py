@@ -37,7 +37,7 @@ def validate_city_graph(G: nx.DiGraph) -> list[dict[str, Any]]:
          (e.g., Water -> Energy -> Water) that would cause simulation deadlocks.
       2. Orphan Detection (`critical`):
          Checks incoming edges for every node:
-           - `health` nodes MUST have incoming edges from BOTH an `energy` AND a `water` node.
+           - `health` nodes MUST have incoming edges from `energy`, `water`, AND `comms` nodes.
            - `water` and `comms` (and `transport`) nodes MUST have an incoming edge from an `energy` node.
            - Completely isolated `energy` nodes (`in_degree == 0` and `out_degree == 0`) are also flagged.
       3. Bottleneck Analysis (`warning`):
@@ -93,8 +93,13 @@ def validate_city_graph(G: nx.DiGraph) -> list[dict[str, Any]]:
                 missing_lifelines.append("energy")
             if "water" not in incoming_types:
                 missing_lifelines.append("water")
+            if "comms" not in incoming_types:
+                missing_lifelines.append("comms")
             if missing_lifelines:
-                missing_label = " and ".join(missing_lifelines)
+                if len(missing_lifelines) == 3:
+                    missing_label = "energy, water, and comms"
+                else:
+                    missing_label = " and ".join(missing_lifelines)
                 diagnostics.append(
                     {
                         "level": "critical",
@@ -103,7 +108,7 @@ def validate_city_graph(G: nx.DiGraph) -> list[dict[str, Any]]:
                         "node_type": node_type,
                         "message": (
                             f"Critical orphan (Health): '{node_str}' lacks mandatory incoming "
-                            f"{missing_label} lifeline connection(s) (requires both energy and water)."
+                            f"{missing_label} lifeline connection(s) (requires energy, water, and comms)."
                         ),
                     }
                 )

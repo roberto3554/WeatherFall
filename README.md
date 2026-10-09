@@ -27,7 +27,7 @@ For every threatened facility, WeatherFall convenes a consensus-driven **Multi-A
 To prevent human error in the Admin Console from causing infinite loops or silent simulation failures, WeatherFall includes a formal graph diagnostic engine (`GET /api/v1/topology/validate`):
 - **Cycle Deadlock Detection (`critical`)**: Uses `networkx.simple_cycles(G)` to detect circular dependencies (e.g., `Water -> Energy -> Water`).
 - **Lifeline Orphan Detection (`critical`)**: Verifies sector-specific incoming lifeline rules:
-  - **Health** nodes must have incoming edges from **both** an `energy` **and** a `water` node.
+  - **Health** nodes must have incoming edges from **`energy`**, **`water`**, **and** **`comms`** nodes.
   - **Water**, **Comms**, **Transport**, and **Safety** nodes must have an incoming edge from an `energy` node.
 - **Supplier Capacity Bottlenecks (`warning`)**: Flags any supplier node whose outgoing dependency count (`out_degree`) exceeds its configured `capacity` attribute.
 - **Cross-App Failsafe Lock**: If any `critical` topological error exists, **Start Simulation** is automatically locked across both the Command Center and Admin Console until resolved.
@@ -213,7 +213,7 @@ Below is a URL-agnostic testing checklist covering **Interactive UI workflows**,
    - Click **`Run Network Diagnostics`** in the Admin toolbar (or in the Command Center sidebar).
    - When the graph has no cycles, orphans, or bottlenecks, verify a green toast appears: **`Topology Valid - System Go`**.
 4. **Trigger the Critical Failsafe Lock (Orphan / Cycle Test)**:
-   - In the Admin Console, add a new `Health` node (or delete the `water` or `energy` incoming edge to an existing Hospital) so it lacks either an Energy or Water lifeline.
+   - In the Admin Console, add a new `Health` node (or delete the `energy`, `water`, or `comms` incoming edge to an existing Hospital) so it lacks one of its three mandatory lifelines (`Energy`, `Water`, or `Comms`).
    - Click **`Run Network Diagnostics`**.
    - Verify the **Diagnostic Report Modal** opens with a red **`CRITICAL`** badge (`Lifeline Orphan`) and a **`FAILSAFE ENGAGED`** banner.
    - Confirm that the **`Start Simulation`** button on the Command Center is now strictly **disabled** (`Start Simulation Locked`) until you connect the missing lifeline or delete the orphan node.
