@@ -47,39 +47,314 @@ To prevent human error in the Admin Console from causing infinite loops or silen
 
 ## 🏗️ System Architecture
 
+### Architecture Diagram 1 — Production Deployment Topology
+
+The production stack uses **Docker Compose** with two isolated bridge networks (`weatherfall_public` and `weatherfall_internal`) to enforce strict network segmentation. Only the Traefik reverse proxy is exposed on the public network; PostgreSQL, Redis, and the Celery worker are confined to the internal network and are unreachable from the internet.
+
 ```mermaid
-flowchart LR
-    subgraph Client["Browser Client (Leaflet GIS + Intro.js)"]
-        UI["Command Center (index.html / app.js)"]
-        Admin["Admin Console (admin.html / admin.js)"]
+flowchart TB
+    subgraph Internet["☁️ Internet"]
+        Browser["🖥️ Browser Client<br/>(Leaflet GIS + Intro.js + html2pdf.js)"]
     end
 
-    subgraph Proxy["Edge Proxy (Prod)"]
-        Traefik["Traefik v3.0 (TLS / HSTS / X-Forwarded-For)"]
+    subgraph PublicNet["weatherfall_public (Exposed Network)"]
+        Traefik["🔒 Traefik v3.1<br/>Let's Encrypt TLS · HSTS · X-Forwarded-For<br/>Ports 80 → 443 redirect"]
+
+        subgraph FrontendContainer["Nginx Container (Prod)"]
+            FE_Index["index.html + app.js<br/>Command Center UI"]
+            FE_Admin["admin.html + admin.js<br/>GIS Admin Console"]
+            FE_Login["login.html + login.js<br/>Operator Auth Portal"]
+            FE_CSS["style.css<br/>Glassmorphic Dark/Light Theme"]
+        end
+
+        subgraph APIContainer["FastAPI Container (Gunicorn + Uvicorn Workers)"]
+            MainPy["main.py<br/>REST API Endpoints · CORS · Rate Limiting"]
+            AuthPy["auth.py<br/>HS256 JWT · HttpOnly Cookies<br/>bcrypt (12 rounds) · Token Revocation"]
+            ValidatorPy["validator.py<br/>NetworkX Topological Integrity<br/>(Cycles · Orphans · Bottlenecks)"]
+            SchemasPy["schemas.py + models.py<br/>Pydantic Validation · SQLAlchemy ORM"]
+        end
     end
 
-    subgraph Backend["FastAPI Application & Workers"]
-        API["FastAPI Server (backend/main.py)"]
-        Val["Topological Validator (backend/validator.py)"]
-        Auth["JWT + Cookie RBAC (backend/auth.py)"]
-        Worker["Celery DES Worker (backend/worker.py)"]
-        Committee["Multi-Agent Crisis Committee (backend/agent.py)"]
+    subgraph InternalNet["weatherfall_internal (Isolated Network)"]
+        subgraph CeleryContainer["Celery Worker Container"]
+            WorkerPy["worker.py<br/>Async DES Engine<br/>heapq Priority Queue<br/>Knapsack Optimizer"]
+            AgentPy["agent.py<br/>Multi-Agent Crisis Committee<br/>(Engineering · Social · Finance · Supervisor)<br/>Groq LLM + Deterministic OR Fallback"]
+        end
+
+        PG[("🐘 PostgreSQL 16<br/>Nodes · Edges · Users<br/>SimulationTraces")]
+        Redis[("🔴 Redis 7<br/>--requirepass<br/>Celery Broker + Result Backend")]
     end
 
-    subgraph Data["Isolated Data Tier (weatherfall_internal)"]
-        PG[("PostgreSQL 16 (Nodes, Edges, Users, Traces)")]
-        Redis[("Redis 7 Broker & Result Backend")]
+    subgraph ExternalAPIs["External Services"]
+        GroqAPI["🤖 Groq Cloud API<br/>openai/gpt-oss-20b<br/>llama-3.3-70b-versatile"]
+        OSM["🗺️ OpenStreetMap<br/>Overpass / Nominatim<br/>(Admin GIS Search)"]
+        CARTO["🌍 CARTO / ESRI<br/>Map Tile CDN"]
     end
 
-    UI --> Traefik --> API
-    Admin --> Traefik --> API
-    API --> Auth
-    API --> Val
-    API --> PG
-    API --> Redis
-    Redis --> Worker
-    Worker --> Committee
-    Worker --> PG
+    Browser -->|"HTTPS :443"| Traefik
+    Traefik -->|"PathPrefix(/api)"| MainPy
+    Traefik -->|"PathPrefix(/)"| FE_Index
+    MainPy --> AuthPy
+    MainPy --> ValidatorPy
+    MainPy -->|"async SQLAlchemy"| PG
+    MainPy -->|"dispatch task"| Redis
+    Redis -->|"consume task"| WorkerPy
+    WorkerPy --> AgentPy
+    WorkerPy -->|"async SQLAlchemy"| PG
+    WorkerPy -->|"store result"| Redis
+    AgentPy -->|"LLM inference"| GroqAPI
+    FE_Admin -->|"/api/v1/osm/search"| OSM
+    Browser -->|"tile requests"| CARTO
+```
+
+### Architecture Diagram 2 — Full Request Lifecycle (Simulation Flow)
+
+This diagram traces a single simulation request from the operator's browser through the entire backend pipeline, showing exactly how HTTP requests are dispatched to background Celery tasks and how results flow back to the UI via polling.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Op as 🖥️ Operator Browser
+    participant FE as 📄 app.js (Frontend)
+    participant API as ⚡ FastAPI (main.py)
+    participant Val as 🔍 Validator (validator.py)
+    participant PG as 🐘 PostgreSQL
+    participant RD as 🔴 Redis
+    participant CW as 🔧 Celery Worker (worker.py)
+    participant AG as 🤖 Crisis Committee (agent.py)
+    participant LLM as ☁️ Groq LLM API
+
+    Op->>FE: Click "Start Simulation"<br/>(Hurricane L5, $5M, 2 crews)
+    FE->>API: POST /api/v1/simulate<br/>{disaster_type, magnitude, trajectory, budget, crews}
+
+    Note over API: Rate limit check (slowapi 3/min)
+    API->>PG: Load infrastructure graph<br/>(SELECT nodes, edges)
+    PG-->>API: 39 nodes, 72 edges (NetworkX DiGraph)
+    API->>Val: validate_city_graph(G)
+    Val-->>API: 0 critical / 10 warnings → Simulation allowed
+
+    API->>RD: Dispatch Celery task (sim_payload)
+    RD-->>API: task_id = "c3f577da-..."
+    API-->>FE: 200 {task_id, status: "processing"}
+
+    Note over FE: Poll every 500ms
+
+    loop Polling Loop
+        FE->>API: GET /api/v1/simulate/{task_id}
+        API->>RD: Check task status
+        RD-->>API: status: "processing"
+        API-->>FE: {status: "processing"}
+    end
+
+    Note over CW: Background DES Execution Begins
+
+    CW->>PG: Load full graph with SVI + population
+    CW->>AG: determine_epicenter(nodes, trajectory)
+    AG->>LLM: Geospatial risk analysis prompt
+    LLM-->>AG: {epicenter_id: "Miami Substation"}
+    AG-->>CW: Epicenter selected
+
+    Note over CW: T+00:00 EPICENTER_IMPACT → heapq DES loop begins
+
+    loop For Each Threatened Facility
+        CW->>AG: evaluate_batch_failures(failing_nodes)
+        AG->>AG: Engineering_Agent: shortest path analysis
+        AG->>AG: Social_Agent: SVI + population advocacy
+        AG->>AG: Finance_Agent: budget/crew audit
+        AG->>AG: Supervisor_Agent: binding consensus verdict
+        AG-->>CW: Recovery command + debate log
+        CW->>CW: Execute DES event<br/>(CRITICAL_BATTERY → RECOVERY_COMPLETED or BATTERY_DEPLETED)
+    end
+
+    CW->>PG: Store SimulationTrace
+    CW->>RD: Store result (43 events)
+
+    FE->>API: GET /api/v1/simulate/{task_id}
+    API->>RD: Fetch completed result
+    RD-->>API: {status: "completed", result: [...]}
+    API-->>FE: Full execution trace (43 events)
+
+    FE->>Op: Animate map + timeline + debate cards
+```
+
+### Architecture Diagram 3 — Multi-Agent Crisis Committee Deliberation
+
+For every threatened facility, the simulation engine convenes a four-agent **Crisis Committee** with conflicting objectives. If the Groq LLM is unavailable or rate-limited, the system seamlessly falls back to a deterministic Operations Research solver (2D Knapsack + Climate Justice weighting).
+
+```mermaid
+flowchart TB
+    subgraph Input["Threatened Facility Context"]
+        Node["🏥 Jackson Memorial Hospital<br/>SVI: 0.92 · Pop: 103,900<br/>Battery: 4.5h · Deadline: T+4.50h"]
+        Candidates["Candidate Suppliers<br/>Latin Quarter Sub (7,018m · $278K · 1.82h)<br/>Natoma Sub (9,200m · $340K · 2.10h)"]
+    end
+
+    subgraph Committee["Multi-Agent Crisis Committee"]
+        direction TB
+        Eng["⚙️ Engineering_Agent<br/>Shortest Graph Path &amp; Stability<br/><i>Minimize distance · Verify ETA &lt; deadline</i>"]
+        Soc["🤝 Social_Agent<br/>Climate Justice, SVI &amp; Population<br/><i>Prioritize SVI &gt; 0.75 · Advocate hospitals</i>"]
+        Fin["💰 Finance_Agent<br/>Strict Budget &amp; Crew Comptroller<br/><i>Enforce sum(cost) ≤ budget · Reject waste</i>"]
+        Sup["👨‍⚖️ Supervisor_Agent<br/>Crisis Committee Chair<br/><i>20-word binding verdict · Resolve conflicts</i>"]
+    end
+
+    subgraph Fallback["Deterministic OR Fallback"]
+        Knapsack["📊 2D Knapsack Solver<br/>Budget × Crews dimensions<br/>Climate Justice ethical utility weighting<br/>Time-window feasibility filter"]
+    end
+
+    subgraph Output["Binding Recovery Command"]
+        CMD["DISPATCH 1 CREW AT T+0.00h:<br/>REROUTE Latin Quarter Sub → Hospital<br/>SVI=0.92 · POP=103,900<br/>ETA T+1.82h &lt; T+4.50h · COST=$278,200"]
+    end
+
+    Node --> Eng
+    Candidates --> Eng
+    Node --> Soc
+    Node --> Fin
+    Candidates --> Fin
+    Eng -->|"Route proposal"| Sup
+    Soc -->|"Equity mandate"| Sup
+    Fin -->|"Budget ruling"| Sup
+    Sup -->|"LLM available"| CMD
+    Eng -.->|"LLM unavailable"| Knapsack
+    Soc -.->|"LLM unavailable"| Knapsack
+    Fin -.->|"LLM unavailable"| Knapsack
+    Knapsack -.->|"Deterministic verdict"| CMD
+```
+
+### Architecture Diagram 4 — Discrete Event Simulation (DES) Engine Pipeline
+
+The simulation engine operates on a `heapq` priority-queue clock (`T+00:00` onward), not a static BFS traversal. Repair crews are dynamically released back to the pool when recovery completes, enabling **Look-Ahead Crew Scheduling** for facilities that enter `CRITICAL_BATTERY` after all crews are dispatched.
+
+```mermaid
+stateDiagram-v2
+    [*] --> ONLINE: System Initialization<br/>(39 nodes ONLINE)
+
+    ONLINE --> EPICENTER_IMPACT: AI selects epicenter<br/>(Groq LLM geospatial analysis)
+    EPICENTER_IMPACT --> OFFLINE: Outgoing lifelines severed<br/>(T+00:00)
+
+    OFFLINE --> CRITICAL_BATTERY: Downstream dependents<br/>switch to UPS backup<br/>(battery_deadline = T + backup_hours)
+
+    CRITICAL_BATTERY --> RECOVERY_DISPATCHED: Crisis Committee approves<br/>reroute (budget ✓ crews ✓ ETA < deadline)
+
+    CRITICAL_BATTERY --> ABANDONED: No viable candidate<br/>(budget exhausted ∨ crews=0<br/>∨ ETA > deadline)
+
+    RECOVERY_DISPATCHED --> RECOVERY_COMPLETED: Crew finishes before<br/>battery_deadline<br/>(crew released back to pool)
+
+    RECOVERY_COMPLETED --> ONLINE: Node back ONLINE<br/>(new emergency edge added<br/>cascade halted for children)
+
+    ABANDONED --> BATTERY_DEPLETED: Backup battery expires<br/>(node collapses to OFFLINE)
+
+    BATTERY_DEPLETED --> OFFLINE: Cascade propagates<br/>to dependent children
+
+    note right of RECOVERY_COMPLETED
+        Dynamic Crew Release:
+        remaining_crews += crews_used
+        Enables Look-Ahead Crew
+        Scheduling for queued nodes
+    end note
+
+    note right of CRITICAL_BATTERY
+        Look-Ahead Crew Scheduling:
+        When remaining_crews == 0,
+        compute next_crew_available_at
+        from DES event heap.
+        Queue repair IFF
+        (slot_time + ETA) < deadline
+    end note
+```
+
+### Architecture Diagram 5 — RBAC Authentication & Session Flow
+
+The authentication system uses signed **HS256 JWT tokens** with unique `jti` claims, **HttpOnly** session cookies (`SameSite=Lax`, `Secure` in production), and **bcrypt** (12 rounds) password hashing. A server-side denylist provides immediate token revocation on sign-out.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Op as 🖥️ Operator
+    participant FE as 📄 login.js
+    participant API as ⚡ FastAPI
+    participant Auth as 🔐 auth.py
+    participant PG as 🐘 PostgreSQL
+
+    Op->>FE: Enter credentials
+    FE->>API: POST /api/v1/auth/login<br/>{username, password}
+    Note over API: Rate limited (5/min)
+    API->>PG: SELECT user WHERE username=?
+    PG-->>API: User record (hashed_password)
+    API->>Auth: verify_password(plain, hash)<br/>(bcrypt 12 rounds)
+    Auth-->>API: ✓ Valid
+
+    API->>Auth: create_access_token(subject, is_admin)<br/>HS256 JWT with jti + iat + exp
+    Auth-->>API: Signed JWT token
+
+    API-->>FE: 200 {access_token, is_admin}<br/>+ Set-Cookie: weatherfall_session (HttpOnly, Secure, SameSite=Lax)
+    FE->>FE: Store token in localStorage
+
+    Note over Op: Subsequent API requests
+
+    Op->>FE: Navigate to /admin
+    FE->>API: GET /api/v1/auth/me<br/>Authorization: Bearer {token}
+    API->>Auth: extract_request_token(request)<br/>(Bearer header → HttpOnly cookie fallback)
+    Auth->>Auth: Check jti against denylist
+    Auth->>Auth: decode_and_verify_token (exp, sub)
+    Auth->>PG: SELECT user WHERE username=sub
+    PG-->>Auth: User (is_admin=true, is_active=true)
+    Auth-->>API: Authenticated admin user
+    API-->>FE: 200 {username, is_admin: true}
+
+    Note over Op: Sign Out
+
+    Op->>FE: Click "Sign Out"
+    FE->>API: POST /api/v1/auth/logout
+    API->>Auth: revoke_token(jti) → denylist
+    API-->>FE: Delete HttpOnly cookie<br/>200 {status: "signed_out"}
+```
+
+### Architecture Diagram 6 — PostgreSQL Data Model
+
+All persistent state is stored in four normalized tables. The `Node` ↔ `Edge` relationship forms the directed infrastructure dependency graph; `SimulationTrace` records the full JSON execution trace of each DES run for post-incident auditing.
+
+```mermaid
+erDiagram
+    users {
+        int id PK
+        varchar username UK "max 60 chars"
+        varchar hashed_password "bcrypt 12 rounds"
+        bool is_admin "default false"
+        bool is_active "default true"
+        timestamptz created_at "server default now()"
+    }
+
+    nodes {
+        int id PK
+        varchar name UK "max 120 chars"
+        varchar type "energy | water | health | comms | transport"
+        float x "longitude"
+        float y "latitude"
+        varchar tier "Primary | Secondary"
+        int capacity "rated out-degree capacity"
+        float battery_backup_hours "UPS endurance (hours)"
+        float social_vulnerability_index "SVI 0.0 - 1.0"
+        int population_served "residents served"
+    }
+
+    edges {
+        int id PK
+        int source_node_id FK "upstream supplier"
+        int target_node_id FK "downstream dependent"
+        float routing_distance "meters (OSM street grid)"
+        jsonb path_nodes "intermediate street waypoints"
+    }
+
+    simulation_traces {
+        int id PK
+        varchar disaster_type "Hurricane | Earthquake | ..."
+        varchar magnitude "Category 5 | Mw 7.6 | ..."
+        varchar epicenter_node "initial impact node name"
+        jsonb trace_data "full DES execution trace (events array)"
+        timestamptz created_at "server default now()"
+    }
+
+    nodes ||--o{ edges : "outgoing (source)"
+    nodes ||--o{ edges : "incoming (target)"
 ```
 
 ---
